@@ -1,0 +1,31 @@
+name: AI Horizon Video Engine
+
+on:
+  repository_dispatch:
+    types: [generate_video]
+
+jobs:
+  build-video:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Setup FFmpeg
+        uses: FedericoCarboni/setup-ffmpeg@v2
+
+      - name: Download Media Files
+        run: |
+          curl -o audio.mp3 "${{ github.event.client_payload.audio_url }}"
+          curl -o video1.mp4 "${{ github.event.client_payload.video1_url }}"
+          curl -o video2.mp4 "${{ github.event.client_payload.video2_url }}"
+          
+      - name: Process Video with FFmpeg
+        run: |
+          ffmpeg -i video1.mp4 -i video2.mp4 -i audio.mp3 -filter_complex "[0:v][1:v]concat=n=2:v=1:a=0[v]" -map "[v]" -map 2:a -c:v libx264 -crf 23 -pix_fmt yuv420p -vf "scale=1080:1920,crop=1080:1920" output.mp4
+
+      - name: Upload to GitHub Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-video
+          path: output.mp4
