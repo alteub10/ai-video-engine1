@@ -50,6 +50,7 @@ jobs:
           VIDEO_URL=$(echo $RESPONSE | grep -o '"url":"[^"]*' | grep -o '[^"]*$')
           DIRECT_URL="${VIDEO_URL/tmpfiles.org\//tmpfiles.org/dl/}"
           
-          curl -X POST "https://server-37dz.onrender.com/webhook/5c6f3aad-0ee0-4931-a126-90ffb2a4875b" \
+          curl -X POST "https://my-n8n-server-37dz.onrender.com/webhook/Qr7jeDdTbb0ykjsy" \
                -H "Content-Type: application/json" \
                -d "{\"video_url\": \"$DIRECT_URL\"}"
+
