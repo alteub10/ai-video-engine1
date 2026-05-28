@@ -3,6 +3,10 @@ from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips
 import moviepy.video.fx.all as vfx
 
 def download_file(url, filename):
+    # الحيلة البرمجية: تحويل رابط tmpfiles إلى رابط تحميل مباشر تلقائياً
+    if "tmpfiles.org" in url and "/dl/" not in url:
+        url = url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
+        
     print(f"Downloading {filename}...")
     r = requests.get(url, stream=True)
     with open(filename, 'wb') as f:
@@ -19,6 +23,7 @@ download_file(v1_url, "v1.mp4")
 download_file(v2_url, "v2.mp4")
 download_file(v3_url, "v3.mp4")
 
+print("Loading audio...")
 audio = AudioFileClip("audio.mp3")
 clip_duration = audio.duration / 3.0 
 
