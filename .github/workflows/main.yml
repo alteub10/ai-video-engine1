@@ -43,3 +43,13 @@ jobs:
         with:
           name: Final-Shorts-Video
           path: final_shorts.mp4
+
+      - name: Send Video to n8n Webhook
+        run: |
+          RESPONSE=$(curl -F "file=@final_shorts.mp4" https://tmpfiles.org/api/v1/upload)
+          VIDEO_URL=$(echo $RESPONSE | grep -o '"url":"[^"]*' | grep -o '[^"]*$')
+          DIRECT_URL="${VIDEO_URL/tmpfiles.org\//tmpfiles.org/dl/}"
+          
+          curl -X POST "https://server-37dz.onrender.com/webhook-test/5c6f3aad-0ee0-4931-a126-90ffb2a4875b" \
+               -H "Content-Type: application/json" \
+               -d "{\"video_url\": \"$DIRECT_URL\"}"
