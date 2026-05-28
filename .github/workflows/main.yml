@@ -18,7 +18,7 @@ jobs:
 
       - name: Install Video Libraries
         run: |
-          pip install moviepy requests imageio[ffmpeg]
+          pip install moviepy==1.0.3 requests imageio[ffmpeg]
 
       - name: Run AI Engine
         run: |
@@ -33,3 +33,4 @@ jobs:
         with:
           name: Final-Shorts-Video
           path: final_shorts.mp4
+
