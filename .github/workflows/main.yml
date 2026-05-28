@@ -24,8 +24,8 @@ jobs:
 
       - name: Install Video & AI Libraries
         run: |
-          python -m pip install --upgrade pip setuptools wheel
-          pip install moviepy==1.0.3 requests imageio[ffmpeg] Pillow==9.5.0 openai-whisper==20231117 setuptools-rust
+          pip install "setuptools<70.0.0" wheel
+          pip install moviepy==1.0.3 requests imageio[ffmpeg] Pillow==9.5.0 openai-whisper setuptools-rust
 
       - name: Run AI Engine
         run: |
