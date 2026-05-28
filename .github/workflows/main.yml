@@ -26,7 +26,10 @@ jobs:
             "${{ github.event.client_payload.audio_url }}" \
             "${{ github.event.client_payload.video1_url }}" \
             "${{ github.event.client_payload.video2_url }}" \
-            "${{ github.event.client_payload.video3_url }}"
+            "${{ github.event.client_payload.video3_url }}" \
+            "${{ github.event.client_payload.video4_url }}" \
+            "${{ github.event.client_payload.video5_url }}" \
+            "${{ github.event.client_payload.video6_url }}"
 
       - name: Save Video as Artifact
         uses: actions/upload-artifact@v4
