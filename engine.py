@@ -17,6 +17,9 @@ urls = sys.argv[1:8]
 audio_url = urls[0]
 v_urls = urls[1:]
 
+# استلام الهوك القادم من GitHub Actions
+hook_text = sys.argv[8]
+
 # تحميل الملفات
 download_file(audio_url, "audio.mp3")
 for i, url in enumerate(v_urls):
@@ -68,9 +71,9 @@ while current_time < total_audio_time:
 
 video_track = concatenate_videoclips(final_clips, method="compose")
 
-# تشغيل الذكاء الاصطناعي للاستماع وكتابة النص
+# استخدام الموديل الإنجليزي لدقة فائقة
 print("AI is listening to audio and generating subtitles...")
-model = whisper.load_model("base")
+model = whisper.load_model("base.en")
 result = model.transcribe("audio.mp3")
 
 subtitle_clips = []
@@ -80,16 +83,23 @@ for segment in result['segments']:
     end = segment['end']
     duration = end - start
     
-    # تصميم النص: خط عريض أبيض مع حواف سوداء وتوسيط في الأسفل
+    # تصميم الترجمة في الأسفل
     txt_clip = TextClip(text, fontsize=65, color='white', font='Liberation-Sans-Bold', 
                         stroke_color='black', stroke_width=3, method='caption', size=(900, None))
     txt_clip = txt_clip.set_start(start).set_duration(duration).set_position(('center', 1300))
     subtitle_clips.append(txt_clip)
 
-# تركيب الفيديو مع الترجمة والصوت
-final_video = CompositeVideoClip([video_track] + subtitle_clips, size=(1080, 1920))
+# تصميم برمجة الهوك (Hook)
+# خط أصفر جذاب، يظهر في الأعلى (مسافة 250 بكسل من السقف)، يبدأ من الثانية 0 ويختفي بعد 3 ثوانٍ
+hook_clip = TextClip(hook_text, fontsize=85, color='yellow', font='Liberation-Sans-Bold', 
+                     stroke_color='black', stroke_width=4, method='caption', size=(950, None))
+hook_clip = hook_clip.set_position(('center', 250)).set_duration(3).set_start(0)
+
+# دمج الفيديو الأساسي + الهوك + الترجمة
+final_video = CompositeVideoClip([video_track, hook_clip] + subtitle_clips, size=(1080, 1920))
 final_video = final_video.set_audio(audio)
 
-print("Rendering PRO video with Subtitles...")
-final_video.write_videofile("final_shorts.mp4", fps=30, codec="libx264", audio_codec="aac", bitrate="5000k")
+print("Rendering PRO video with Subtitles and Hook...")
+# إضافة إعدادات السرعة (threads و preset) لتوفير وقت السيرفر
+final_video.write_videofile("final_shorts.mp4", fps=30, codec="libx264", audio_codec="aac", bitrate="5000k", preset="ultrafast", threads=4)
 print("Done!")
