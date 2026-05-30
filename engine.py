@@ -12,12 +12,10 @@ def download_file(url, filename):
         for chunk in r.iter_content(chunk_size=1024):
             if chunk: f.write(chunk)
 
-# استلام الروابط
+# استلام الروابط والهوك
 urls = sys.argv[1:8]
 audio_url = urls[0]
 v_urls = urls[1:]
-
-# استلام الهوك القادم من GitHub Actions
 hook_text = sys.argv[8]
 
 # تحميل الملفات
@@ -27,9 +25,10 @@ for i, url in enumerate(v_urls):
 
 audio = AudioFileClip("audio.mp3")
 total_audio_time = audio.duration
-
-# مدة القص السريع
 cut_duration = 2.5
+
+# --- إعدادات دقة 2K (الوزن الذهبي) ---
+target_w, target_h = 1440, 2560
 
 def process_and_zoom(filename):
     clip = VideoFileClip(filename)
@@ -38,15 +37,23 @@ def process_and_zoom(filename):
     else:
         clip = clip.subclip(0, cut_duration)
 
-    clip = clip.resize(height=1920)
+    # الحل الجذري لمنع الخط الأسود النحيف
+    clip_ratio = clip.w / clip.h
+    target_ratio = target_w / target_h
+
+    if clip_ratio > target_ratio:
+        clip = clip.resize(height=target_h)
+    else:
+        clip = clip.resize(width=target_w)
+
     w, h = clip.size
-    clip = clip.crop(x_center=w/2, y_center=h/2, width=1080, height=1920)
-    # زووم احترافي
+    clip = clip.crop(x_center=w/2, y_center=h/2, width=target_w, height=target_h)
+    
     clip = clip.resize(lambda t: 1 + 0.03 * t)
-    clip = CompositeVideoClip([clip.set_position("center")], size=(1080, 1920)).set_duration(cut_duration)
+    clip = CompositeVideoClip([clip.set_position("center")], size=(target_w, target_h)).set_duration(cut_duration)
     return clip
 
-print("Processing Fast Cuts...")
+print("Processing Fast Cuts in 2K...")
 clips_pool = []
 for i in range(6):
     try:
@@ -71,7 +78,6 @@ while current_time < total_audio_time:
 
 video_track = concatenate_videoclips(final_clips, method="compose")
 
-# استخدام الموديل الإنجليزي لدقة فائقة
 print("AI is listening to audio and generating subtitles...")
 model = whisper.load_model("base.en")
 result = model.transcribe("audio.mp3")
@@ -83,23 +89,20 @@ for segment in result['segments']:
     end = segment['end']
     duration = end - start
     
-    # تصميم الترجمة في الأسفل
-    txt_clip = TextClip(text, fontsize=65, color='white', font='Liberation-Sans-Bold', 
-                        stroke_color='black', stroke_width=3, method='caption', size=(900, None))
-    txt_clip = txt_clip.set_start(start).set_duration(duration).set_position(('center', 1300))
+    # تعديل حجم الترجمة وإحداثياتها لتناسب 2K
+    txt_clip = TextClip(text, fontsize=90, color='white', font='Liberation-Sans-Bold', 
+                        stroke_color='black', stroke_width=4, method='caption', size=(1200, None))
+    txt_clip = txt_clip.set_start(start).set_duration(duration).set_position(('center', 1750))
     subtitle_clips.append(txt_clip)
 
-# تصميم برمجة الهوك (Hook)
-# خط أصفر جذاب، يظهر في الأعلى (مسافة 250 بكسل من السقف)، يبدأ من الثانية 0 ويختفي بعد 3 ثوانٍ
-hook_clip = TextClip(hook_text, fontsize=85, color='yellow', font='Liberation-Sans-Bold', 
-                     stroke_color='black', stroke_width=4, method='caption', size=(950, None))
-hook_clip = hook_clip.set_position(('center', 250)).set_duration(3).set_start(0)
+# تعديل حجم الهوك وإحداثياته في المنطقة الآمنة العلوية لـ 2K
+hook_clip = TextClip(hook_text, fontsize=115, color='yellow', font='Liberation-Sans-Bold', 
+                     stroke_color='black', stroke_width=5, method='caption', size=(1250, None))
+hook_clip = hook_clip.set_position(('center', 350)).set_duration(3).set_start(0)
 
-# دمج الفيديو الأساسي + الهوك + الترجمة
-final_video = CompositeVideoClip([video_track, hook_clip] + subtitle_clips, size=(1080, 1920))
+final_video = CompositeVideoClip([video_track, hook_clip] + subtitle_clips, size=(target_w, target_h))
 final_video = final_video.set_audio(audio)
 
-print("Rendering PRO video with Subtitles and Hook...")
-# إضافة إعدادات السرعة (threads و preset) لتوفير وقت السيرفر
-final_video.write_videofile("final_shorts.mp4", fps=30, codec="libx264", audio_codec="aac", bitrate="5000k", preset="ultrafast", threads=4)
+print("Rendering PRO 2K video with Subtitles and Hook...")
+final_video.write_videofile("final_shorts.mp4", fps=30, codec="libx264", audio_codec="aac", bitrate="10000k", preset="ultrafast", threads=4)
 print("Done!")
