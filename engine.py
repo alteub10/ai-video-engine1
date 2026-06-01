@@ -1,5 +1,5 @@
 import os, sys, requests
-from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips, CompositeVideoClip, TextClip
+from moviepy.editor import VideoFileClip, AudioFileClip, ImageClip, concatenate_videoclips, CompositeVideoClip, TextClip
 import moviepy.video.fx.all as vfx
 import whisper
 
@@ -12,11 +12,9 @@ def download_file(url, filename):
         for chunk in r.iter_content(chunk_size=1024):
             if chunk: f.write(chunk)
 
-# استلام الروابط والهوك
-urls = sys.argv[1:8]
-audio_url = urls[0]
-v_urls = urls[1:]
-hook_text = sys.argv[8]
+# استلام الروابط فقط (تم إزالة الهوك النصي)
+audio_url = sys.argv[1]
+v_urls = sys.argv[2:8]
 
 # تحميل الملفات
 download_file(audio_url, "audio.mp3")
@@ -26,6 +24,7 @@ for i, url in enumerate(v_urls):
 audio = AudioFileClip("audio.mp3")
 total_audio_time = audio.duration
 cut_duration = 2.5
+thumbnail_duration = 1.5 # مدة ظهور الغلاف في بداية الفيديو
 
 # --- إعدادات دقة 2K (الوزن الذهبي) ---
 target_w, target_h = 1440, 2560
@@ -62,10 +61,22 @@ for i in range(6):
         print(f"Error v{i+1}: {e}")
 
 final_clips = []
-current_time = 0
+
+# التحقق من وجود صورة الغلاف وإضافتها في البداية
+if os.path.exists("thumbnail.png"):
+    print("Adding Cinematic Thumbnail as the first frame...")
+    thumb_clip = ImageClip("thumbnail.png").set_duration(thumbnail_duration)
+    final_clips.append(thumb_clip)
+    current_time = thumbnail_duration
+else:
+    print("Thumbnail not found, proceeding with video clips only...")
+    current_time = 0
+
 pool_index = 0
 
 while current_time < total_audio_time:
+    if not clips_pool:
+        break
     clip = clips_pool[pool_index % len(clips_pool)]
     time_left = total_audio_time - current_time
     if time_left < cut_duration:
@@ -95,14 +106,10 @@ for segment in result['segments']:
     txt_clip = txt_clip.set_start(start).set_duration(duration).set_position(('center', 1750))
     subtitle_clips.append(txt_clip)
 
-# تعديل حجم الهوك وإحداثياته في المنطقة الآمنة العلوية لـ 2K
-hook_clip = TextClip(hook_text, fontsize=115, color='yellow', font='Liberation-Sans-Bold', 
-                     stroke_color='black', stroke_width=5, method='caption', size=(1250, None))
-hook_clip = hook_clip.set_position(('center', 350)).set_duration(3).set_start(0)
-
-final_video = CompositeVideoClip([video_track, hook_clip] + subtitle_clips, size=(target_w, target_h))
+# دمج مسار الفيديو والترجمة (الـ Hook النصي تم إزالته بالكامل)
+final_video = CompositeVideoClip([video_track] + subtitle_clips, size=(target_w, target_h))
 final_video = final_video.set_audio(audio)
 
-print("Rendering PRO 2K video with Subtitles and Hook...")
+print("Rendering PRO 2K video with Thumbnail and Subtitles...")
 final_video.write_videofile("final_shorts.mp4", fps=30, codec="libx264", audio_codec="aac", bitrate="10000k", preset="ultrafast", threads=4)
 print("Done!")
