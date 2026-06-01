@@ -12,9 +12,11 @@ def download_file(url, filename):
         for chunk in r.iter_content(chunk_size=1024):
             if chunk: f.write(chunk)
 
-# استلام الروابط فقط (تم إزالة الهوك النصي)
-audio_url = sys.argv[1]
-v_urls = sys.argv[2:8]
+# استلام الروابط والنص الخاطف (Hook) آلياً من GitHub Actions
+urls = sys.argv[1:8]
+audio_url = urls[0]
+v_urls = urls[1:]
+hook_text = sys.argv[8]
 
 # تحميل الملفات
 download_file(audio_url, "audio.mp3")
@@ -106,10 +108,16 @@ for segment in result['segments']:
     txt_clip = txt_clip.set_start(start).set_duration(duration).set_position(('center', 1750))
     subtitle_clips.append(txt_clip)
 
-# دمج مسار الفيديو والترجمة (الـ Hook النصي تم إزالته بالكامل)
-final_video = CompositeVideoClip([video_track] + subtitle_clips, size=(target_w, target_h))
+# إضافة النص الخاطف الجذاب في أول 3 ثواني آلياً
+print("Adding Auto-Hook Text...")
+hook_clip = TextClip(hook_text, fontsize=115, color='yellow', font='Liberation-Sans-Bold', 
+                     stroke_color='black', stroke_width=5, method='caption', size=(1250, None))
+hook_clip = hook_clip.set_position(('center', 350)).set_duration(3).set_start(0)
+
+# دمج مسار الفيديو والترجمة والنص الخاطف
+final_video = CompositeVideoClip([video_track, hook_clip] + subtitle_clips, size=(target_w, target_h))
 final_video = final_video.set_audio(audio)
 
-print("Rendering PRO 2K video with Thumbnail and Subtitles...")
+print("Rendering PRO 2K video with Thumbnail, Subtitles, and Hook...")
 final_video.write_videofile("final_shorts.mp4", fps=30, codec="libx264", audio_codec="aac", bitrate="10000k", preset="ultrafast", threads=4)
 print("Done!")
