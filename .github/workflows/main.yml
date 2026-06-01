@@ -35,6 +35,9 @@ jobs:
         run: python generate_thumbnail.py
 
       - name: Run AI Engine
+        env:
+          # تمرير النص الخاطف بأمان لمحرك الفيديو ليطبع النص الأصفر
+          HOOK_TEXT: ${{ github.event.client_payload.thumbnail_text }}
         run: |
           python engine.py \
             "${{ github.event.client_payload.audio_url }}" \
@@ -43,7 +46,8 @@ jobs:
             "${{ github.event.client_payload.video3_url }}" \
             "${{ github.event.client_payload.video4_url }}" \
             "${{ github.event.client_payload.video5_url }}" \
-            "${{ github.event.client_payload.video6_url }}"
+            "${{ github.event.client_payload.video6_url }}" \
+            "$HOOK_TEXT"
 
       - name: Save Video as Artifact
         uses: actions/upload-artifact@v4
@@ -60,7 +64,7 @@ jobs:
           VIDEO_URL=$(echo $RESPONSE | grep -o '"url":"[^"]*' | grep -o '[^"]*$')
           DIRECT_URL="${VIDEO_URL/tmpfiles.org\//tmpfiles.org/dl/}"
           
-          # دمج البيانات بأمان تام وإرسالها كـ text إلى تيليجرام/n8n
+          # دمج البيانات بأمان تام وإرسالها كـ text إلى تيليجرام
           jq -n \
             --arg url "$DIRECT_URL" \
             --arg text "$CAPTION_TEXT" \
