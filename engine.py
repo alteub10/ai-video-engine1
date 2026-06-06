@@ -1,4 +1,4 @@
-import os, sys, requests
+import os, sys, requests, subprocess
 from moviepy.editor import VideoFileClip, AudioFileClip, ImageClip, concatenate_videoclips, CompositeVideoClip, TextClip, CompositeAudioClip
 import moviepy.video.fx.all as vfx
 import moviepy.audio.fx.all as afx
@@ -18,6 +18,9 @@ urls = sys.argv[1:8]
 audio_url = urls[0]
 v_urls = urls[1:]
 hook_text = sys.argv[8]
+
+# --- استلام اسم الموضوع لتحديد الفلتر المناسب ---
+topic_name = os.environ.get("TOPIC_NAME", "Unknown Topic").lower()
 
 # تحميل الملفات
 download_file(audio_url, "audio.mp3")
@@ -139,6 +142,40 @@ hook_clip = hook_clip.set_position(('center', 350)).set_duration(3).set_start(0)
 final_video = CompositeVideoClip([video_track, hook_clip] + subtitle_clips, size=(target_w, target_h))
 final_video = final_video.set_audio(audio)
 
-print("Rendering PRO 2K video with Thumbnail, Subtitles, and Sequential Eerie Music...")
-final_video.write_videofile("final_shorts.mp4", fps=30, codec="libx264", audio_codec="aac", bitrate="10000k", preset="ultrafast", threads=4)
-print("Done!")
+# قفل برمجي صارم لمنع أي ثواني إضافية أو شاشات سوداء
+final_video = final_video.set_duration(total_audio_time)
+
+print("Rendering Base 2K video with Thumbnail, Subtitles, and Sequential Eerie Music...")
+final_video.write_videofile("temp_shorts.mp4", fps=30, codec="libx264", audio_codec="aac", bitrate="10000k", preset="ultrafast", threads=4)
+
+# --- نظام توجيه الفلاتر (LUT Router) ---
+print("Selecting Cinematic LUT based on Topic...")
+selected_lut = "dark.cube" # الفلتر الافتراضي
+
+# تحليل الكلمات المفتاحية للموضوع
+if any(keyword in topic_name for keyword in ["river", "ocean", "sea", "water", "cyclops", "eltanin", "ice", "antarctic"]):
+    selected_lut = "cold.cube"
+elif any(keyword in topic_name for keyword in ["1908", "1918", "1947", "history", "tunguska", "incident", "vintage"]):
+    selected_lut = "vintage.cube"
+elif any(keyword in topic_name for keyword in ["forest", "drone", "woods", "mountain"]):
+    selected_lut = "green.cube"
+
+lut_path = f"luts/{selected_lut}"
+print(f"Topic is: {topic_name} | Selected LUT: {lut_path}")
+
+# تطبيق الفلتر اللوني عبر FFmpeg
+print("Applying Color Grading via FFmpeg...")
+final_graded_output = "final_shorts.mp4" # نفس الاسم النهائي الذي ينتظره نظامك للرفع
+
+# تطبيق الفلتر على الفيديو الناتج
+command = [
+    'ffmpeg',
+    '-i', 'temp_shorts.mp4',
+    '-vf', f'lut3d={lut_path}',
+    '-c:a', 'copy', # نسخ الصوت دون تشويه أو تأخير
+    '-y',
+    final_graded_output
+]
+
+subprocess.run(command)
+print("Done! Final Graded Video is Ready for Upload.")
