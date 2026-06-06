@@ -38,6 +38,10 @@ jobs:
         env:
           # تمرير النص الخاطف بأمان لمحرك الفيديو ليطبع النص الأصفر
           HOOK_TEXT: ${{ github.event.client_payload.thumbnail_text }}
+          # استلام اسم الموضوع لاختيار الفلتر السينمائي المناسب
+          TOPIC_NAME: ${{ github.event.client_payload.topic_name }}
+          # رقم التشغيل لضمان تسلسل موسيقى الرعب
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
         run: |
           python engine.py \
             "${{ github.event.client_payload.audio_url }}" \
