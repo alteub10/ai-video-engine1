@@ -1,6 +1,7 @@
 import os, sys, requests
-from moviepy.editor import VideoFileClip, AudioFileClip, ImageClip, concatenate_videoclips, CompositeVideoClip, TextClip
+from moviepy.editor import VideoFileClip, AudioFileClip, ImageClip, concatenate_videoclips, CompositeVideoClip, TextClip, CompositeAudioClip
 import moviepy.video.fx.all as vfx
+import moviepy.audio.fx.all as afx
 import whisper
 
 def download_file(url, filename):
@@ -23,8 +24,28 @@ download_file(audio_url, "audio.mp3")
 for i, url in enumerate(v_urls):
     download_file(url, f"v{i+1}.mp4")
 
-audio = AudioFileClip("audio.mp3")
-total_audio_time = audio.duration
+# --- بداية نظام الموسيقى السينمائية التسلسلية ---
+main_audio = AudioFileClip("audio.mp3")
+total_audio_time = main_audio.duration
+
+# استخدام عداد تشغيل جيت هاب لضمان الترتيب التسلسلي الدقيق دون تكرار
+run_number = int(os.environ.get('GITHUB_RUN_NUMBER', 1))
+bg_music_files = [f"bg{i}.mp3" for i in range(2, 41)] # القائمة من bg2 وحتى bg40
+
+# معادلة الدوران: تضمن مرور كل المقاطع بالترتيب ثم البدء من جديد
+track_index = (run_number - 1) % len(bg_music_files)
+selected_bg = bg_music_files[track_index]
+
+print(f"Adding Eerie Background Music: {selected_bg} (Factory Run: {run_number})")
+
+bg_audio = AudioFileClip(selected_bg)
+bg_audio = bg_audio.fx(afx.volumex, 0.08) # خفض الصوت لمستوى الهمس المرعب 8%
+bg_audio = bg_audio.fx(afx.audio_loop, duration=total_audio_time)
+
+# دمج التعليق الصوتي لـ AI مع الموسيقى الخلفية
+audio = CompositeAudioClip([main_audio, bg_audio])
+# --- نهاية نظام الموسيقى ---
+
 cut_duration = 2.5
 thumbnail_duration = 1.5 # مدة ظهور الغلاف في بداية الفيديو
 
@@ -118,6 +139,6 @@ hook_clip = hook_clip.set_position(('center', 350)).set_duration(3).set_start(0)
 final_video = CompositeVideoClip([video_track, hook_clip] + subtitle_clips, size=(target_w, target_h))
 final_video = final_video.set_audio(audio)
 
-print("Rendering PRO 2K video with Thumbnail, Subtitles, and Hook...")
+print("Rendering PRO 2K video with Thumbnail, Subtitles, and Sequential Eerie Music...")
 final_video.write_videofile("final_shorts.mp4", fps=30, codec="libx264", audio_codec="aac", bitrate="10000k", preset="ultrafast", threads=4)
 print("Done!")
