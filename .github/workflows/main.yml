@@ -44,7 +44,7 @@ jobs:
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
         run: |
           python engine.py \
-            "${{ github.event.client_payload.audio_url }}" \
+            
             "${{ github.event.client_payload.video1_url }}" \
             "${{ github.event.client_payload.video2_url }}" \
             "${{ github.event.client_payload.video3_url }}" \
