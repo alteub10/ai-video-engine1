@@ -5,21 +5,37 @@ import moviepy.audio.fx.all as afx
 import whisper
 
 def download_file(url, filename):
+    # نظام حماية صارم: إذا كان الرابط فارغاً، استخدم فيديو الرعب الاحتياطي بدلاً من إيقاف الكود
+    if not url or url.strip() == "":
+        print(f"Warning: URL for {filename} is empty! Using fallback video.")
+        url = "https://videos.pexels.com/video-files/5938927/5938927-hd_1080_1920_25fps.mp4"
+        
     if "tmpfiles.org" in url and "/dl/" not in url:
         url = url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
     print(f"Downloading {filename}...")
-    r = requests.get(url, stream=True)
-    with open(filename, 'wb') as f:
-        for chunk in r.iter_content(chunk_size=1024):
-            if chunk: f.write(chunk)
+    
+    try:
+        r = requests.get(url, stream=True, timeout=15)
+        r.raise_for_status()
+        with open(filename, 'wb') as f:
+            for chunk in r.iter_content(chunk_size=8192):
+                if chunk: f.write(chunk)
+    except Exception as e:
+        print(f"Error downloading {filename}: {e}")
 
-# استلام الروابط والنص الخاطف (Hook) آلياً من GitHub Actions
-urls = sys.argv[1:8]
-audio_url = urls[0]
-v_urls = urls[1:]
-hook_text = sys.argv[8]
+# --- استلام البيانات المدمجة من جيت هاب وفك تشفيرها ---
+try:
+    audio_url = sys.argv[1]
+    video_string = sys.argv[2] # النص الذي يحتوي على الروابط مفصولة بـ |
+    hook_text = sys.argv[3]
+except IndexError:
+    print("Error: Missing arguments from GitHub Actions!")
+    sys.exit(1)
 
-# --- استلام اسم الموضوع لتحديد الفلتر المناسب ---
+# فك دمج الفيديوهات لتصبح مصفوفة (قائمة) جاهزة للتحميل
+v_urls = video_string.split("|")
+
+# استلام اسم الموضوع لتحديد الفلتر المناسب
 topic_name = os.environ.get("TOPIC_NAME", "Unknown Topic").lower()
 
 # تحميل الملفات
@@ -31,28 +47,29 @@ for i, url in enumerate(v_urls):
 main_audio = AudioFileClip("audio.mp3")
 total_audio_time = main_audio.duration
 
-# استخدام عداد تشغيل جيت هاب لضمان الترتيب التسلسلي الدقيق دون تكرار
+# استخدام عداد تشغيل جيت هاب لضمان الترتيب التسلسلي
 run_number = int(os.environ.get('GITHUB_RUN_NUMBER', 1))
-bg_music_files = [f"bg{i}.mp3" for i in range(2, 41)] # القائمة من bg2 وحتى bg40
+bg_music_files = [f"bg{i}.mp3" for i in range(2, 41)]
 
-# معادلة الدوران: تضمن مرور كل المقاطع بالترتيب ثم البدء من جديد
+# معادلة الدوران
 track_index = (run_number - 1) % len(bg_music_files)
 selected_bg = bg_music_files[track_index]
 
 print(f"Adding Eerie Background Music: {selected_bg} (Factory Run: {run_number})")
 
 bg_audio = AudioFileClip(selected_bg)
-bg_audio = bg_audio.fx(afx.volumex, 0.08) # خفض الصوت لمستوى الهمس المرعب 8%
+bg_audio = bg_audio.fx(afx.volumex, 0.08) # خفض الصوت لمستوى الهمس
 bg_audio = bg_audio.fx(afx.audio_loop, duration=total_audio_time)
 
-# دمج التعليق الصوتي لـ AI مع الموسيقى الخلفية
+# دمج التعليق الصوتي
 audio = CompositeAudioClip([main_audio, bg_audio])
 # --- نهاية نظام الموسيقى ---
 
-cut_duration = 2.5
-thumbnail_duration = 1.5 # مدة ظهور الغلاف في بداية الفيديو
+# ضبط مدة المشهد لتتغير كل 6 ثوانٍ لضمان تفاعل المشاهد
+cut_duration = 6.0 
+thumbnail_duration = 1.5 
 
-# --- إعدادات دقة 2K (الوزن الذهبي) ---
+# --- إعدادات دقة 2K ---
 target_w, target_h = 1440, 2560
 
 def process_and_zoom(filename):
@@ -62,7 +79,7 @@ def process_and_zoom(filename):
     else:
         clip = clip.subclip(0, cut_duration)
 
-    # الحل الجذري لمنع الخط الأسود النحيف
+    # معالجة الأبعاد لمنع الأشرطة السوداء
     clip_ratio = clip.w / clip.h
     target_ratio = target_w / target_h
 
@@ -80,15 +97,14 @@ def process_and_zoom(filename):
 
 print("Processing Fast Cuts in 2K...")
 clips_pool = []
-for i in range(6):
+for i in range(len(v_urls)):
     try:
         clips_pool.append(process_and_zoom(f"v{i+1}.mp4"))
     except Exception as e:
-        print(f"Error v{i+1}: {e}")
+        print(f"Error processing v{i+1}: {e}")
 
 final_clips = []
 
-# التحقق من وجود صورة الغلاف وإضافتها في البداية
 if os.path.exists("thumbnail.png"):
     print("Adding Cinematic Thumbnail as the first frame...")
     thumb_clip = ImageClip("thumbnail.png").set_duration(thumbnail_duration)
@@ -126,23 +142,18 @@ for segment in result['segments']:
     end = segment['end']
     duration = end - start
     
-    # تعديل حجم الترجمة وإحداثياتها لتناسب 2K
     txt_clip = TextClip(text, fontsize=90, color='white', font='Liberation-Sans-Bold', 
                         stroke_color='black', stroke_width=4, method='caption', size=(1200, None))
     txt_clip = txt_clip.set_start(start).set_duration(duration).set_position(('center', 1750))
     subtitle_clips.append(txt_clip)
 
-# إضافة النص الخاطف الجذاب في أول 3 ثواني آلياً
 print("Adding Auto-Hook Text...")
 hook_clip = TextClip(hook_text, fontsize=115, color='yellow', font='Liberation-Sans-Bold', 
                      stroke_color='black', stroke_width=5, method='caption', size=(1250, None))
 hook_clip = hook_clip.set_position(('center', 350)).set_duration(3).set_start(0)
 
-# دمج مسار الفيديو والترجمة والنص الخاطف
 final_video = CompositeVideoClip([video_track, hook_clip] + subtitle_clips, size=(target_w, target_h))
 final_video = final_video.set_audio(audio)
-
-# قفل برمجي صارم لمنع أي ثواني إضافية أو شاشات سوداء
 final_video = final_video.set_duration(total_audio_time)
 
 print("Rendering Base 2K video with Thumbnail, Subtitles, and Sequential Eerie Music...")
@@ -150,9 +161,8 @@ final_video.write_videofile("temp_shorts.mp4", fps=30, codec="libx264", audio_co
 
 # --- نظام توجيه الفلاتر (LUT Router) ---
 print("Selecting Cinematic LUT based on Topic...")
-selected_lut = "dark.cube" # الفلتر الافتراضي
+selected_lut = "dark.cube" 
 
-# تحليل الكلمات المفتاحية للموضوع
 if any(keyword in topic_name for keyword in ["river", "ocean", "sea", "water", "cyclops", "eltanin", "ice", "antarctic"]):
     selected_lut = "cold.cube"
 elif any(keyword in topic_name for keyword in ["1908", "1918", "1947", "history", "tunguska", "incident", "vintage"]):
@@ -163,16 +173,14 @@ elif any(keyword in topic_name for keyword in ["forest", "drone", "woods", "moun
 lut_path = f"luts/{selected_lut}"
 print(f"Topic is: {topic_name} | Selected LUT: {lut_path}")
 
-# تطبيق الفلتر اللوني عبر FFmpeg
 print("Applying Color Grading via FFmpeg...")
-final_graded_output = "final_shorts.mp4" # نفس الاسم النهائي الذي ينتظره نظامك للرفع
+final_graded_output = "final_shorts.mp4" 
 
-# تطبيق الفلتر على الفيديو الناتج
 command = [
     'ffmpeg',
     '-i', 'temp_shorts.mp4',
     '-vf', f'lut3d={lut_path}',
-    '-c:a', 'copy', # نسخ الصوت دون تشويه أو تأخير
+    '-c:a', 'copy', 
     '-y',
     final_graded_output
 ]
