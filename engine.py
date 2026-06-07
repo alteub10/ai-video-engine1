@@ -108,7 +108,6 @@ while current_time < total_audio_time:
     if not clips_pool:
         break
     clip = clips_pool[pool_index % len(clips_pool)]
-    # تم الإصلاح هنا: الكود كامل وسليم
     time_left = total_audio_time - current_time
     if time_left < cut_duration:
         clip = clip.subclip(0, time_left)
@@ -147,27 +146,46 @@ final_video = final_video.set_duration(total_audio_time)
 print("Rendering Base 2K video...")
 final_video.write_videofile("temp_shorts.mp4", fps=30, codec="libx264", audio_codec="aac", bitrate="10000k", preset="ultrafast", threads=4)
 
-print("Applying Color Grading via FFmpeg...")
-selected_lut = "dark.cube" 
-if any(keyword in topic_name for keyword in ["river", "ocean", "sea", "water", "cyclops", "eltanin", "ice", "antarctic"]):
-    selected_lut = "cold.cube"
-elif any(keyword in topic_name for keyword in ["1908", "1918", "1947", "history", "tunguska", "incident", "vintage"]):
-    selected_lut = "vintage.cube"
-elif any(keyword in topic_name for keyword in ["forest", "drone", "woods", "mountain"]):
-    selected_lut = "green.cube"
+# --- نظام توجيه الفلاتر الذكي ---
+print("Selecting Cinematic LUT based on Topic...")
+selected_lut = "DEEN.cube" 
 
-lut_path = f"luts/{selected_lut}"
+if any(keyword in topic_name for keyword in ["river", "ocean", "sea", "water", "cyclops", "eltanin", "ice", "antarctic"]):
+    selected_lut = "Alaska.cube"
+elif any(keyword in topic_name for keyword in ["1908", "1918", "1947", "history", "tunguska", "incident", "vintage"]):
+    selected_lut = "CineStill.cube"
+elif any(keyword in topic_name for keyword in ["forest", "drone", "woods", "mountain"]):
+    selected_lut = "GREENn.cube"
+
+# نظام أمان: التحقق من وجود الفلتر أو البحث عن أي فلتر بديل
+if not os.path.exists(selected_lut):
+    print(f"Warning: {selected_lut} not found! Searching for any .cube file...")
+    available_luts = [f for f in os.listdir('.') if f.endswith('.cube')]
+    if available_luts:
+        selected_lut = available_luts[0]
+        print(f"Using alternative LUT: {selected_lut}")
+    else:
+        print("No .cube files found! Proceeding without color grading.")
+        selected_lut = None
+
 final_graded_output = "final_shorts.mp4" 
 
-# المصفوفة مغلقة بشكل سليم
-command = [
-    'ffmpeg',
-    '-i', 'temp_shorts.mp4',
-    '-vf', f'lut3d={lut_path}',
-    '-c:a', 'copy', 
-    '-y',
-    final_graded_output
-]
-
-subprocess.run(command)
-print("Done! Final Graded Video is Ready for Upload.")
+if selected_lut:
+    print(f"Topic is: {topic_name} | Applying LUT: {selected_lut}")
+    command = [
+        'ffmpeg',
+        '-i', 'temp_shorts.mp4',
+        '-vf', f'lut3d={selected_lut}',
+        '-c:a', 'copy', 
+        '-y',
+        final_graded_output
+    ]
+    try:
+        subprocess.run(command, check=True)
+        print("Done! Final Graded Video is Ready for Upload.")
+    except Exception as e:
+        print(f"FFmpeg failed: {e}. Falling back to base video.")
+        os.rename('temp_shorts.mp4', final_graded_output)
+else:
+    os.rename('temp_shorts.mp4', final_graded_output)
+    print("Done! Base Video is Ready for Upload (No LUT applied).")
