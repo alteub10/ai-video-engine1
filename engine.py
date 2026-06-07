@@ -108,4 +108,66 @@ while current_time < total_audio_time:
     if not clips_pool:
         break
     clip = clips_pool[pool_index % len(clips_pool)]
-    time_left = total_audio_time -
+    # تم الإصلاح هنا: الكود كامل وسليم
+    time_left = total_audio_time - current_time
+    if time_left < cut_duration:
+        clip = clip.subclip(0, time_left)
+        current_time += time_left
+    else:
+        current_time += cut_duration
+    final_clips.append(clip)
+    pool_index += 1
+
+video_track = concatenate_videoclips(final_clips, method="compose")
+
+print("AI is listening to audio and generating subtitles...")
+model = whisper.load_model("base.en")
+result = model.transcribe("audio.mp3")
+
+subtitle_clips = []
+for segment in result['segments']:
+    text = segment['text'].strip()
+    start = segment['start']
+    end = segment['end']
+    duration = end - start
+    
+    txt_clip = TextClip(text, fontsize=90, color='white', font='Liberation-Sans-Bold', 
+                        stroke_color='black', stroke_width=4, method='caption', size=(1200, None))
+    txt_clip = txt_clip.set_start(start).set_duration(duration).set_position(('center', 1750))
+    subtitle_clips.append(txt_clip)
+
+hook_clip = TextClip(hook_text, fontsize=115, color='yellow', font='Liberation-Sans-Bold', 
+                     stroke_color='black', stroke_width=5, method='caption', size=(1250, None))
+hook_clip = hook_clip.set_position(('center', 350)).set_duration(3).set_start(0)
+
+final_video = CompositeVideoClip([video_track, hook_clip] + subtitle_clips, size=(target_w, target_h))
+final_video = final_video.set_audio(audio)
+final_video = final_video.set_duration(total_audio_time)
+
+print("Rendering Base 2K video...")
+final_video.write_videofile("temp_shorts.mp4", fps=30, codec="libx264", audio_codec="aac", bitrate="10000k", preset="ultrafast", threads=4)
+
+print("Applying Color Grading via FFmpeg...")
+selected_lut = "dark.cube" 
+if any(keyword in topic_name for keyword in ["river", "ocean", "sea", "water", "cyclops", "eltanin", "ice", "antarctic"]):
+    selected_lut = "cold.cube"
+elif any(keyword in topic_name for keyword in ["1908", "1918", "1947", "history", "tunguska", "incident", "vintage"]):
+    selected_lut = "vintage.cube"
+elif any(keyword in topic_name for keyword in ["forest", "drone", "woods", "mountain"]):
+    selected_lut = "green.cube"
+
+lut_path = f"luts/{selected_lut}"
+final_graded_output = "final_shorts.mp4" 
+
+# المصفوفة مغلقة بشكل سليم
+command = [
+    'ffmpeg',
+    '-i', 'temp_shorts.mp4',
+    '-vf', f'lut3d={lut_path}',
+    '-c:a', 'copy', 
+    '-y',
+    final_graded_output
+]
+
+subprocess.run(command)
+print("Done! Final Graded Video is Ready for Upload.")
