@@ -12,7 +12,7 @@ def download_file(url, filename):
         
     if "tmpfiles.org" in url and "/dl/" not in url:
         url = url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
-    print(f"Downloading {filename}...")
+    print(f"Downloading {filename} from {url}...")
     
     try:
         r = requests.get(url, stream=True, timeout=15)
@@ -23,20 +23,22 @@ def download_file(url, filename):
     except Exception as e:
         print(f"Error downloading {filename}: {e}")
 
-# --- استلام البيانات المدمجة من جيت هاب وفك تشفيرها ---
-try:
-    audio_url = sys.argv[1]
-    video_string = sys.argv[2] # النص الذي يحتوي على الروابط مفصولة بـ |
-    hook_text = sys.argv[3]
-except IndexError:
-    print("Error: Missing arguments from GitHub Actions!")
+# --- النظام الجديد والمدرع: استلام البيانات عبر متغيرات البيئة ---
+audio_url = os.environ.get("AUDIO_URL", "")
+video_string = os.environ.get("VIDEO_URLS", "")
+hook_text = os.environ.get("HOOK_TEXT", "MYSTERY")
+topic_name = os.environ.get("TOPIC_NAME", "Unknown Topic").lower()
+
+print(f"Received Audio: {audio_url}")
+print(f"Received Videos: {video_string}")
+
+# فحص أمان أخير لمنع الكود من العمل في الفراغ
+if not audio_url or not video_string:
+    print("CRITICAL ERROR: Data did not arrive from GitHub Actions env properly!")
     sys.exit(1)
 
 # فك دمج الفيديوهات لتصبح مصفوفة (قائمة) جاهزة للتحميل
 v_urls = video_string.split("|")
-
-# استلام اسم الموضوع لتحديد الفلتر المناسب
-topic_name = os.environ.get("TOPIC_NAME", "Unknown Topic").lower()
 
 # تحميل الملفات
 download_file(audio_url, "audio.mp3")
@@ -57,12 +59,15 @@ selected_bg = bg_music_files[track_index]
 
 print(f"Adding Eerie Background Music: {selected_bg} (Factory Run: {run_number})")
 
-bg_audio = AudioFileClip(selected_bg)
-bg_audio = bg_audio.fx(afx.volumex, 0.08) # خفض الصوت لمستوى الهمس
-bg_audio = bg_audio.fx(afx.audio_loop, duration=total_audio_time)
-
-# دمج التعليق الصوتي
-audio = CompositeAudioClip([main_audio, bg_audio])
+try:
+    bg_audio = AudioFileClip(selected_bg)
+    bg_audio = bg_audio.fx(afx.volumex, 0.08) # خفض الصوت لمستوى الهمس
+    bg_audio = bg_audio.fx(afx.audio_loop, duration=total_audio_time)
+    # دمج التعليق الصوتي
+    audio = CompositeAudioClip([main_audio, bg_audio])
+except Exception as e:
+    print(f"Warning: Could not load background music {selected_bg}. Error: {e}. Proceeding without background music.")
+    audio = main_audio
 # --- نهاية نظام الموسيقى ---
 
 # ضبط مدة المشهد لتتغير كل 6 ثوانٍ لضمان تفاعل المشاهد
@@ -182,8 +187,4 @@ command = [
     '-vf', f'lut3d={lut_path}',
     '-c:a', 'copy', 
     '-y',
-    final_graded_output
-]
-
-subprocess.run(command)
-print("Done! Final Graded Video is Ready for Upload.")
+    final
