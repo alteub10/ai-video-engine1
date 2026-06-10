@@ -3,9 +3,6 @@ import sys
 import requests
 import subprocess
 import gc
-from moviepy.editor import VideoFileClip, AudioFileClip, ImageClip, concatenate_videoclips, CompositeVideoClip, TextClip, CompositeAudioClip
-import moviepy.video.fx.all as vfx
-import moviepy.audio.fx.all as afx
 import whisper
 
 def download_file(url, filename):
@@ -13,7 +10,7 @@ def download_file(url, filename):
         url = "https://videos.pexels.com/video-files/5938927/5938927-hd_1080_1920_25fps.mp4"
     if "tmpfiles.org" in url and "/dl/" not in url:
         url = url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
-    print(f"Downloading {filename}...")
+    print(f"[*] Downloading {filename}...")
     try:
         r = requests.get(url, stream=True, timeout=15)
         r.raise_for_status()
@@ -21,10 +18,9 @@ def download_file(url, filename):
             for chunk in r.iter_content(chunk_size=8192):
                 if chunk: f.write(chunk)
     except Exception as e:
-        print(f"Error downloading {filename}: {e}")
+        print(f"[!] Error downloading {filename}: {e}")
 
 def format_time(seconds):
-    """تحويل الثواني إلى صيغة الطوابع الزمنية الخاصة بملفات SRT"""
     hours = int(seconds // 3600)
     minutes = int((seconds % 3600) // 60)
     secs = int(seconds % 60)
@@ -36,11 +32,9 @@ def format_time(seconds):
 # ==========================================
 audio_url = os.environ.get("AUDIO_URL", "")
 video_string = os.environ.get("VIDEO_URLS", "")
-hook_text = os.environ.get("HOOK_TEXT", "MYSTERY").upper()
+hook_text = os.environ.get("HOOK_TEXT", "MYSTERY").upper().replace("'", "").replace(":", "")
 topic_name = os.environ.get("TOPIC_NAME", "Unknown Topic").lower()
-
 cut_duration = float(os.environ.get("MAX_CLIP_DURATION", 2.5))
-target_w, target_h = 1080, 1920
 
 if not audio_url or not video_string:
     print("CRITICAL ERROR: Data missing!")
@@ -54,17 +48,17 @@ for i, url in enumerate(v_urls):
     download_file(url, fname)
     downloaded_files.append(fname)
 
-main_audio = AudioFileClip("audio.mp3")
-total_audio_time = main_audio.duration
+# حساب مدة الصوت باستخدام ffprobe الخام
+cmd_probe = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', 'audio.mp3']
+total_audio_time = float(subprocess.check_output(cmd_probe).decode('utf-8').strip())
 
 # ==========================================
-# 2. الترجمة الدقيقة وتوليد ملف SRT الآمن على الرام
+# 2. الترجمة الدقيقة وحماية الرام
 # ==========================================
-print("[*] Transcribing with Whisper and generating SRT file...")
-model = whisper.load_model("base.en") # إرجاع دقة الذكاء الاصطناعي
+print("[*] Transcribing with Whisper (Base Model)...")
+model = whisper.load_model("base.en")
 result = model.transcribe("audio.mp3", word_timestamps=True)
 
-# كتابة ملف الترجمة بصيغة تجزئة كلمتين
 with open("subs.srt", "w", encoding="utf-8") as srt_file:
     sub_idx = 1
     for segment in result.get('segments', []):
@@ -74,138 +68,94 @@ with open("subs.srt", "w", encoding="utf-8") as srt_file:
             if not chunk:
                 chunk_start = w_info['start']
             chunk.append(w_info['word'].strip().upper())
-            
             if len(chunk) == 2 or i == len(words) - 1:
                 chunk_end = w_info['end']
-                text = " ".join(chunk)
-                srt_file.write(f"{sub_idx}\n")
-                srt_file.write(f"{format_time(chunk_start)} --> {format_time(chunk_end)}\n")
-                srt_file.write(f"{text}\n\n")
+                srt_file.write(f"{sub_idx}\n{format_time(chunk_start)} --> {format_time(chunk_end)}\n{' '.join(chunk)}\n\n")
                 sub_idx += 1
                 chunk = []
 
-# تدمير الذكاء الاصطناعي فوراً لتفريغ الذاكرة بالكامل
 del model
 del result
 gc.collect()
-print("[*] SRT file generated successfully. RAM cleared.")
+print("[*] SRT generated. Whisper cleared from RAM.")
 
 # ==========================================
-# 3. إعداد الصوت
+# 3. معالجة الفيديو الخام (FFmpeg Direct) - الحل النهائي للرام!
 # ==========================================
+print("[*] Forging Video Clips via Raw FFmpeg (Zero RAM Leaks)...")
+processed_clips = []
+for i, vid in enumerate(downloaded_files):
+    out_name = f"proc_{i}.mp4"
+    # هذا السطر السحري يقوم بتكرار الفيديو إذا كان قصيراً (-stream_loop -1) ويقصه عند 2.5 ثانية (-t 2.5) ويضبط المقاس والظلام
+    vf_string = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30,eq=brightness=-0.08"
+    cmd = [
+        'ffmpeg', '-y', '-stream_loop', '-1', '-i', vid, '-t', str(cut_duration),
+        '-vf', vf_string, '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', '-an', out_name
+    ]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    processed_clips.append(out_name)
+
+# ==========================================
+# 4. بناء خط الزمن (Timeline Demuxer)
+# ==========================================
+print("[*] Generating Timeline Concat File...")
+with open("concat.txt", "w") as f:
+    current_time = 0
+    idx = 0
+    while current_time < total_audio_time:
+        if not processed_clips: break
+        clip_name = processed_clips[idx % len(processed_clips)]
+        f.write(f"file '{clip_name}'\n")
+        current_time += cut_duration
+        idx += 1
+
+# تجهيز الموسيقى
 run_number = int(os.environ.get('GITHUB_RUN_NUMBER', 1))
 bg_music_files = [f"bg{i}.mp3" for i in range(2, 41)]
 selected_bg = bg_music_files[(run_number - 1) % len(bg_music_files)]
 
-try:
-    bg_audio = AudioFileClip(selected_bg).fx(afx.volumex, 0.08).fx(afx.audio_loop, duration=total_audio_time)
-    audio = CompositeAudioClip([main_audio, bg_audio])
-except Exception:
-    audio = main_audio
+print("[*] Merging Video, Voice, and Music...")
+if os.path.exists(selected_bg):
+    filter_complex = '[1:a]volume=1.0[a1];[2:a]volume=0.08[a2];[a1][a2]amix=inputs=2:duration=first:dropout_transition=2[aout]'
+    cmd_merge = [
+        'ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', 'concat.txt',
+        '-i', 'audio.mp3', '-stream_loop', '-1', '-i', selected_bg,
+        '-filter_complex', filter_complex, '-map', '0:v', '-map', '[aout]',
+        '-c:v', 'copy', '-c:a', 'aac', '-shortest', 'temp_base.mp4'
+    ]
+else:
+    cmd_merge = [
+        'ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', 'concat.txt', '-i', 'audio.mp3',
+        '-map', '0:v', '-map', '1:a', '-c:v', 'copy', '-c:a', 'aac', '-shortest', 'temp_base.mp4'
+    ]
+subprocess.run(cmd_merge, check=True)
 
 # ==========================================
-# 4. المعالجة البصرية (بدون إنشاء TextClips مدمرة للرام)
+# 5. السحر النهائي (حرق الترجمة، الخطاف، والفلاتر)
 # ==========================================
-def process_clip_safely(filename, target_duration):
-    clip = VideoFileClip(filename)
-    if clip.duration < target_duration:
-        clip = clip.fx(vfx.loop, duration=target_duration)
-    else:
-        clip = clip.subclip(0, target_duration)
-
-    w, h = clip.size
-    target_ratio = target_w / target_h
-    if (w/h) > target_ratio:
-        clip = clip.resize(height=target_h)
-        clip = clip.crop(x_center=clip.w/2, width=target_w)
-    else:
-        clip = clip.resize(width=target_w)
-        clip = clip.crop(y_center=clip.h/2, height=target_h)
-
-    clip = clip.fx(vfx.colorx, 0.80)
-    return clip
-
-print("[*] Assembling visual timeline...")
-final_clips = []
-current_time = 0
-pool_index = 0
-
-while current_time < total_audio_time:
-    if not downloaded_files: break
-    filename = downloaded_files[pool_index % len(downloaded_files)]
-    time_left = total_audio_time - current_time
-    duration = min(cut_duration, time_left)
-    
-    try:
-        clip = process_clip_safely(filename, duration)
-        final_clips.append(clip)
-    except Exception as e:
-        print(f"Error: {e}")
-        
-    current_time += duration
-    pool_index += 1
-
-video_track = concatenate_videoclips(final_clips, method="chain")
-
-# إبقاء الخطاف (Hook) فقط كـ TextClip لأنه يظهر لمرة واحدة ولا يؤثر على الذاكرة
-hook_clip = TextClip(hook_text, fontsize=110, color='red', font='Liberation-Sans-Bold', 
-                     stroke_color='black', stroke_width=5, method='caption', size=(1000, None))
-hook_clip = hook_clip.set_position(('center', 350)).set_duration(min(3.0, total_audio_time)).set_start(0)
-
-final_video = CompositeVideoClip([video_track, hook_clip], size=(target_w, target_h))
-final_video = final_video.set_audio(audio).set_duration(total_audio_time)
-
-print("[*] Rendering Base Video (Extremely fast & Low RAM)...")
-final_video.write_videofile(
-    "temp_base.mp4", 
-    fps=30, 
-    codec="libx264", 
-    audio_codec="aac", 
-    bitrate="4000k", 
-    preset="ultrafast", 
-    threads=2, 
-    logger=None
-)
-
-# ==========================================
-# 5. السحر الحقيقي: حرق الترجمة والفلاتر عبر FFmpeg
-# ==========================================
-print("[*] Burning AI Subtitles and applying LUT via FFmpeg...")
-
+print("[*] Burning AI Subtitles, Hook Text, and Cinematic LUT...")
 selected_lut = "DEEN.cube" 
-if any(kw in topic_name for kw in ["river", "ocean", "sea", "water", "ice", "antarctic"]):
-    selected_lut = "Alaska.cube"
-elif any(kw in topic_name for kw in ["1908", "1918", "1947", "history", "vintage"]):
-    selected_lut = "CineStill.cube"
-elif any(kw in topic_name for kw in ["forest", "drone", "woods", "mountain"]):
-    selected_lut = "GREENn.cube"
+if any(kw in topic_name for kw in ["river", "ocean", "sea", "water", "ice", "antarctic"]): selected_lut = "Alaska.cube"
+elif any(kw in topic_name for kw in ["1908", "1918", "1947", "history", "vintage"]): selected_lut = "CineStill.cube"
+elif any(kw in topic_name for kw in ["forest", "drone", "woods", "mountain"]): selected_lut = "GREENn.cube"
+if not os.path.exists(selected_lut): selected_lut = [f for f in os.listdir('.') if f.endswith('.cube')][0] if [f for f in os.listdir('.') if f.endswith('.cube')] else None
 
-if not os.path.exists(selected_lut):
-    available_luts = [f for f in os.listdir('.') if f.endswith('.cube')]
-    selected_lut = available_luts[0] if available_luts else None
+# إعداد خط أوبونتو الافتراضي
+font_path = "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
 
-# إعداد خيارات الخط للترجمة (أصفر، خط عريض، في المنتصف)
-# Alignment=5 تعني التوسيط العمودي والأفقي في منتصف الشاشة
-subtitle_style = "Fontname=Liberation Sans,Fontsize=24,PrimaryColour=&H00FFFF,OutlineColour=&H000000,BorderStyle=1,Outline=2,Alignment=5"
+# رسم الخطاف الأحمر (لأول 3 ثوانٍ)
+drawtext_flt = f"drawtext=fontfile='{font_path}':text='{hook_text}':fontcolor=red:fontsize=115:x=(w-text_w)/2:y=350:borderw=5:bordercolor=black:enable='between(t,0,3)'"
+# حرق ملف الترجمة SRT 
+sub_flt = f"subtitles=subs.srt:force_style='Fontname=Liberation Sans,Fontsize=22,PrimaryColour=&H00FFFF,OutlineColour=&H000000,BorderStyle=1,Outline=2,Alignment=5'"
 
-# بناء سلسلة الفلاتر (Filtergraph) لـ FFmpeg
-vf_filters = f"subtitles=subs.srt:force_style='{subtitle_style}'"
-if selected_lut:
-    vf_filters += f",lut3d={selected_lut}"
+vf_filters = f"{sub_flt},{drawtext_flt}"
+if selected_lut: vf_filters += f",lut3d={selected_lut}"
 
-final_graded_output = "final_shorts.mp4" 
-
-ffmpeg_command = [
-    'ffmpeg', '-y',
-    '-i', 'temp_base.mp4',
-    '-vf', vf_filters,
-    '-c:a', 'copy', 
-    final_graded_output
-]
+final_output = "final_shorts.mp4"
+cmd_final = ['ffmpeg', '-y', '-i', 'temp_base.mp4', '-vf', vf_filters, '-c:a', 'copy', final_output]
 
 try:
-    subprocess.run(ffmpeg_command, check=True)
-    print("[*] Done! Final Graded Video with AI Subtitles is Ready.")
+    subprocess.run(cmd_final, check=True)
+    print("\n[+] BOOM! Final Masterpiece Rendered Successfully with 0% RAM Waste! [+]")
 except Exception as e:
-    print(f"[!] FFmpeg subtitle burn failed: {e}")
-    os.rename('temp_base.mp4', final_graded_output)
+    print(f"[!] FFmpeg Subtitle Burn Failed: {e}")
