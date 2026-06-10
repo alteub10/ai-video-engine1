@@ -32,6 +32,8 @@ jobs:
           IMAGE_URL: ${{ github.event.client_payload.image_url }}
           VIDEO_TITLE: ${{ github.event.client_payload.thumbnail_text }}
           FONT_FILE: "VCR_OSD_MONO_1.001.ttf"
+          # إضافة مفتاح Pexels السري لمنع حظر السيرفر (Error 401)
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
         run: python generate_thumbnail.py
 
       - name: Run AI Engine
@@ -42,6 +44,11 @@ jobs:
           HOOK_TEXT: ${{ github.event.client_payload.thumbnail_text }}
           TOPIC_NAME: ${{ github.event.client_payload.topic_name }}
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
+          
+          # متغيرات الإيقاع البصري والاحتفاظ (التقطيع كل 2.5 ثانية)
+          MAX_CLIP_DURATION: ${{ github.event.client_payload.max_clip_duration }}
+          TOTAL_CLIPS: ${{ github.event.client_payload.total_clips }}
+          TRANSITION_STYLE: ${{ github.event.client_payload.transition_style }}
         run: |
           # لاحظ هنا: أمر نظيف جداً يسحب البيانات من البيئة المحيطة
           python engine.py
