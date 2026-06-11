@@ -56,11 +56,14 @@ main_audio = AudioFileClip("audio.mp3")
 total_audio_time = main_audio.duration
 
 # ==========================================
-# 2. الترجمة عبر الذكاء الاصطناعي (Whisper)
+# 2. الترجمة عبر الذكاء الاصطناعي (مُحسّن للـ CPU)
 # ==========================================
-print("[*] Transcribing with Whisper...")
-model = whisper.load_model("base.en")
-result = model.transcribe("audio.mp3", word_timestamps=True)
+print("[*] Transcribing with Whisper (CPU Optimized)...")
+# استخدام نموذج tiny.en وتوجيهه للعمل على المعالج العادي لإنقاذ الرام
+model = whisper.load_model("tiny.en", device="cpu")
+
+# تعطيل خيار fp16 المخصص لكروت الشاشة لمنع انهيار السيرفر
+result = model.transcribe("audio.mp3", word_timestamps=True, fp16=False)
 
 with open("subs.srt", "w", encoding="utf-8") as srt_file:
     sub_idx = 1
@@ -140,7 +143,7 @@ while current_time < total_audio_time:
 
 video_track = concatenate_videoclips(final_clips, method="compose")
 
-# سحب الخطاف وجعله باللون البرتقالي (Orange) في الأعلى تماماً (Y=300)
+# الخطاف البرتقالي في الأعلى
 hook_clip = TextClip(hook_text, fontsize=110, color='orange', font='Liberation-Sans-Bold', 
                      stroke_color='black', stroke_width=5, method='caption', size=(1000, None))
 hook_clip = hook_clip.set_position(('center', 300)).set_duration(min(3.0, total_audio_time)).set_start(0)
@@ -159,7 +162,7 @@ final_video.close()
 gc.collect()
 
 # ==========================================
-# 5. لصق الترجمة باللون الأصفر السينمائي في المنتصف عبر FFmpeg
+# 5. الترجمة الصفراء في المنتصف
 # ==========================================
 print("[*] Burning Dynamic Yellow Subtitles in Center...")
 
@@ -172,9 +175,6 @@ if not os.path.exists(selected_lut):
     available_luts = [f for f in os.listdir('.') if f.endswith('.cube')]
     selected_lut = available_luts[0] if available_luts else None
 
-# تعديل الألوان بدقة هيدروليكية:
-# PrimaryColour=&H00FFFF& تعني أصفر مشع تماماً للترجمة
-# Alignment=5 تعني وضع النص في منتصف الشاشة (Center) تماماً ليركز المشاهد على الكلمات
 sub_flt = "subtitles=subs.srt:force_style='Fontname=Liberation Sans,Fontsize=26,PrimaryColour=&H00FFFF&,OutlineColour=&H000000&,BorderStyle=1,Outline=3,Alignment=5'"
 vf_filters = sub_flt
 if selected_lut: vf_filters += f",lut3d={selected_lut}"
@@ -184,6 +184,6 @@ cmd_final = ['ffmpeg', '-y', '-i', 'temp_base.mp4', '-vf', vf_filters, '-c:a', '
 
 try:
     subprocess.run(cmd_final, check=True)
-    print("\n[+] SUCCESS: Color alignment completed! [+]")
+    print("\n[+] SUCCESS: Render and alignment completed! [+]")
 except Exception as e:
     print(f"[!] Filter failed: {e}")
