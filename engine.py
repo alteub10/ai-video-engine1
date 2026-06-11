@@ -38,7 +38,7 @@ if len(sys.argv) > 1 and sys.argv[1] == '--transcribe':
                     chunk_start = word.start
                 chunk.append(word.word.strip().upper())
                 
-                # كلمتين فقط كحد أقصى لضمان بقاء النص في سطر واحد أنيق
+                # كلمتين فقط كحد أقصى لضمان بقاء النص قوياً وفي سطر واحد
                 if len(chunk) == 2 or i == len(segment.words) - 1:
                     chunk_end = word.end
                     srt_file.write(f"{sub_idx}\n{format_time(chunk_start)} --> {format_time(chunk_end)}\n{' '.join(chunk)}\n\n")
@@ -90,7 +90,6 @@ if __name__ == '__main__':
     subprocess.run([sys.executable, __file__, '--transcribe'], check=True)
     print("[*] Back to Main: AI RAM fully reclaimed by OS.")
 
-    # تحميل مكتبات المونتاج تأجيلياً
     print("[*] Loading MoviePy for Video Editing...")
     from moviepy.editor import VideoFileClip, AudioFileClip, CompositeAudioClip, concatenate_videoclips, TextClip, CompositeVideoClip, ColorClip
     import moviepy.video.fx.all as vfx
@@ -157,10 +156,10 @@ if __name__ == '__main__':
 
     video_track = concatenate_videoclips(final_clips, method="compose")
 
-    # الخطاف البصري البرتقالي في الأعلى
+    # الخطاف البصري (الهوك) البرتقالي - تم تثبيته في منتصف الشاشة (Center)
     hook_clip = TextClip(hook_text, fontsize=110, color='orange', font='Liberation-Sans-Bold', 
                          stroke_color='black', stroke_width=5, method='caption', size=(1000, None))
-    hook_clip = hook_clip.set_position(('center', 300)).set_duration(min(3.0, total_audio_time)).set_start(0)
+    hook_clip = hook_clip.set_position(('center', 'center')).set_duration(min(3.0, total_audio_time)).set_start(0)
 
     final_video = CompositeVideoClip([video_track, hook_clip], size=(target_w, target_h))
     final_video = final_video.set_audio(final_audio).set_duration(total_audio_time + 2.5)
@@ -178,9 +177,9 @@ if __name__ == '__main__':
     gc.collect()
 
     # =================================================================
-    # ضبط تصميم الترجمة الأزرق والأبيض بشكل متناسق 100% - مقاس 20
+    # ضبط تصميم الترجمة الأزرق القاتم (بالحجم المتوسط الأنيق 26)
     # =================================================================
-    print("[*] Burning Custom Blue-Border Subtitles via FFmpeg...")
+    print("[*] Burning Custom Dark Blue Subtitles via FFmpeg...")
     selected_lut = "DEEN.cube" 
     if any(kw in topic_name for kw in ["river", "ocean", "sea", "water", "ice", "antarctic"]): selected_lut = "Alaska.cube"
     elif any(kw in topic_name for kw in ["1908", "1918", "1947", "history", "vintage"]): selected_lut = "CineStill.cube"
@@ -191,11 +190,11 @@ if __name__ == '__main__':
         selected_lut = available_luts[0] if available_luts else None
 
     # التعديلات الهندسية هنا:
-    # Fontsize=20 (الحجم المطلوب الدقيق)
-    # Outline=3 (إطار أزرق قوي لكن ليس مزعجاً)
-    # MarginL=40, MarginR=40 (هوامش لحماية النص من الالتصاق بحواف الشاشة)
-    # Alignment=5 (سنتر حقيقي)
-    sub_flt = "subtitles=subs.srt:force_style='Fontname=Liberation Sans,Bold=1,Fontsize=20,PrimaryColour=&HFFFFFF&,OutlineColour=&HDD5500&,BackColour=&H882200&,BorderStyle=1,Outline=3,Shadow=1.5,Alignment=5,MarginL=40,MarginR=40'"
+    # Fontsize=26 (أصغر بقليل من الصورة، ليكون أنيقاً ومتناسقاً)
+    # Outline=3 (إطار أزرق قاتم متناسب مع حجم الخط)
+    # Alignment=2 (توسيط في الأسفل)
+    # MarginV=250 (الارتفاع المثالي ليكون فوق أزرار الإعجاب تماماً كما في صورتك المرجعية)
+    sub_flt = "subtitles=subs.srt:force_style='Fontname=Liberation Sans,Bold=1,Fontsize=26,PrimaryColour=&HFFFFFF&,OutlineColour=&H8B0000&,BackColour=&H000000&,BorderStyle=1,Outline=3,Shadow=1.5,Alignment=2,MarginL=40,MarginR=40,MarginV=250'"
     
     vf_filters = sub_flt
     if selected_lut: vf_filters += f",lut3d={selected_lut}"
@@ -204,4 +203,4 @@ if __name__ == '__main__':
     cmd_final = ['ffmpeg', '-y', '-i', 'temp_base.mp4', '-vf', vf_filters, '-c:a', 'copy', '-threads', '2', final_output]
 
     subprocess.run(cmd_final, check=True)
-    print("\n[+] SUCCESS: Video generated with perfectly centered Blue Subtitles! [+]")
+    print("\n[+] SUCCESS: Video generated with perfect Bottom Dark Blue Subtitles! [+]")
