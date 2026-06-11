@@ -11,9 +11,13 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Allocate Swap Space (Hardware Hack)
+      - name: Allocate Swap Space (Hardware Hack - Bulletproof)
         run: |
-          sudo fallocate -l 10G /swapfile
+          # إيقاف وحذف أي ملفات تبديل قديمة مغلقة لمنع خطأ Text file busy
+          sudo swapoff /swapfile || true
+          sudo rm -f /swapfile
+          # إنشاء الرامات الوهمية، وإذا فشل الأمر السريع يتم استخدام أمر dd كخطة طوارئ
+          sudo fallocate -l 8G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=8192
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile
           sudo swapon /swapfile
