@@ -156,10 +156,13 @@ if __name__ == '__main__':
 
     video_track = concatenate_videoclips(final_clips, method="compose")
 
-    # الخطاف البصري (الهوك) البرتقالي - تم تثبيته في منتصف الشاشة (Center)
+    # =================================================================
+    # 1. إصلاح الهوك: تم تثبيته في الأعلى (Y=200) بقوة
+    # =================================================================
     hook_clip = TextClip(hook_text, fontsize=110, color='orange', font='Liberation-Sans-Bold', 
                          stroke_color='black', stroke_width=5, method='caption', size=(1000, None))
-    hook_clip = hook_clip.set_position(('center', 'center')).set_duration(min(3.0, total_audio_time)).set_start(0)
+    # تم إلغاء 'center' للارتفاع، ووضعنا 200 ليكون في الربع العلوي من الشاشة دائماً
+    hook_clip = hook_clip.set_position(('center', 200)).set_duration(min(3.0, total_audio_time)).set_start(0)
 
     final_video = CompositeVideoClip([video_track, hook_clip], size=(target_w, target_h))
     final_video = final_video.set_audio(final_audio).set_duration(total_audio_time + 2.5)
@@ -177,7 +180,7 @@ if __name__ == '__main__':
     gc.collect()
 
     # =================================================================
-    # ضبط تصميم الترجمة الأزرق القاتم (بالحجم المتوسط الأنيق 26)
+    # 2. إصلاح الترجمة: حواف صلبة نظيفة + الموقع في "المنطقة الذهبية"
     # =================================================================
     print("[*] Burning Custom Dark Blue Subtitles via FFmpeg...")
     selected_lut = "DEEN.cube" 
@@ -189,12 +192,11 @@ if __name__ == '__main__':
         available_luts = [f for f in os.listdir('.') if f.endswith('.cube')]
         selected_lut = available_luts[0] if available_luts else None
 
-    # التعديلات الهندسية هنا:
-    # Fontsize=26 (أصغر بقليل من الصورة، ليكون أنيقاً ومتناسقاً)
-    # Outline=3 (إطار أزرق قاتم متناسب مع حجم الخط)
-    # Alignment=2 (توسيط في الأسفل)
-    # MarginV=250 (الارتفاع المثالي ليكون فوق أزرار الإعجاب تماماً كما في صورتك المرجعية)
-    sub_flt = "subtitles=subs.srt:force_style='Fontname=Liberation Sans,Bold=1,Fontsize=26,PrimaryColour=&HFFFFFF&,OutlineColour=&H8B0000&,BackColour=&H000000&,BorderStyle=1,Outline=3,Shadow=1.5,Alignment=2,MarginL=40,MarginR=40,MarginV=250'"
+    # التعديلات الهندسية النهائية:
+    # Shadow=0 : (إلغاء الظل تماماً لتصبح الحواف نظيفة مثل الهوك)
+    # Outline=3 : (إطار أزرق قاتم صلب ونظيف)
+    # MarginV=45 : (النسبة الآمنة التي تضع النص تحت السنتر وفوق أزرار تيك توك بدون أن يطير للأعلى)
+    sub_flt = "subtitles=subs.srt:force_style='Fontname=Liberation Sans,Bold=1,Fontsize=24,PrimaryColour=&HFFFFFF&,OutlineColour=&H8B0000&,BackColour=&H000000&,BorderStyle=1,Outline=3,Shadow=0,Alignment=2,MarginL=30,MarginR=30,MarginV=45'"
     
     vf_filters = sub_flt
     if selected_lut: vf_filters += f",lut3d={selected_lut}"
@@ -203,4 +205,4 @@ if __name__ == '__main__':
     cmd_final = ['ffmpeg', '-y', '-i', 'temp_base.mp4', '-vf', vf_filters, '-c:a', 'copy', '-threads', '2', final_output]
 
     subprocess.run(cmd_final, check=True)
-    print("\n[+] SUCCESS: Video generated with perfect Bottom Dark Blue Subtitles! [+]")
+    print("\n[+] SUCCESS: Video generated with perfect Layout and Clean Borders! [+]")
