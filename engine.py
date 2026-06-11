@@ -3,6 +3,7 @@ import sys
 import requests
 import gc
 import subprocess
+import re
 
 # =================================================================
 # 1. الوضع المنعزل: تشغيل الذكاء الاصطناعي في بيئة مغلقة ثم تدميرها
@@ -36,7 +37,10 @@ if len(sys.argv) > 1 and sys.argv[1] == '--transcribe':
             for i, word in enumerate(segment.words):
                 if not chunk:
                     chunk_start = word.start
-                chunk.append(word.word.strip().upper())
+                
+                # إزالة النقاط والفواصل وعلامات الترقيم من الترجمة نهائياً
+                clean_word = re.sub(r'[.,!?;:]', '', word.word.strip().upper())
+                chunk.append(clean_word)
                 
                 # كلمتين فقط كحد أقصى لضمان بقاء النص قوياً وفي سطر واحد
                 if len(chunk) == 2 or i == len(segment.words) - 1:
@@ -69,10 +73,13 @@ def download_file(url, filename):
 if __name__ == '__main__':
     audio_url = os.environ.get("AUDIO_URL", "")
     video_string = os.environ.get("VIDEO_URLS", "")
-    hook_text = os.environ.get("HOOK_TEXT", "MYSTERY").upper().replace("'", "").replace(":", "")
     topic_name = os.environ.get("TOPIC_NAME", "Unknown Topic").lower()
     cut_duration = float(os.environ.get("MAX_CLIP_DURATION", 2.5))
     target_w, target_h = 1080, 1920
+
+    # جلب الهوك وإزالة النقاط والفواصل منه تماماً
+    raw_hook = os.environ.get("HOOK_TEXT", "MYSTERY").upper().replace("'", "")
+    hook_text = re.sub(r'[.,!?;:]', '', raw_hook)
 
     if not audio_url or not video_string:
         print("CRITICAL ERROR: Data missing!")
@@ -146,26 +153,19 @@ if __name__ == '__main__':
         current_time += duration
         pool_index += 1
 
-    # الخاتمة الإلزامية للمقاطع
-    outro_text = "Don't forget to like and subscribe"
-    outro_clip = TextClip(outro_text, fontsize=85, color='white', font='Liberation-Sans-Bold', 
-                          stroke_color='black', stroke_width=4, method='caption', size=(900, None))
-    outro_bg = ColorClip(size=(target_w, target_h), color=(0,0,0)).set_duration(2.5)
-    final_outro = CompositeVideoClip([outro_bg, outro_clip.set_position('center')]).set_duration(2.5)
-    final_clips.append(final_outro)
-
     video_track = concatenate_videoclips(final_clips, method="compose")
 
     # =================================================================
-    # 1. إصلاح الهوك: تم تثبيته في الأعلى (Y=200) بقوة
+    # الهوك في الأعلى (بدون نقاط، بحواف سوداء نظيفة)
     # =================================================================
     hook_clip = TextClip(hook_text, fontsize=110, color='orange', font='Liberation-Sans-Bold', 
                          stroke_color='black', stroke_width=5, method='caption', size=(1000, None))
-    # تم إلغاء 'center' للارتفاع، ووضعنا 200 ليكون في الربع العلوي من الشاشة دائماً
     hook_clip = hook_clip.set_position(('center', 200)).set_duration(min(3.0, total_audio_time)).set_start(0)
 
     final_video = CompositeVideoClip([video_track, hook_clip], size=(target_w, target_h))
-    final_video = final_video.set_audio(final_audio).set_duration(total_audio_time + 2.5)
+    
+    # تم إلغاء لقطة "الاشتراك" لينهي الفيديو مع نهاية الصوت فوراً
+    final_video = final_video.set_audio(final_audio).set_duration(total_audio_time)
 
     print("[*] Rendering Base Timeline...")
     final_video.write_videofile(
@@ -180,7 +180,7 @@ if __name__ == '__main__':
     gc.collect()
 
     # =================================================================
-    # 2. إصلاح الترجمة: حواف صلبة نظيفة + الموقع في "المنطقة الذهبية"
+    # الترجمة السفلية: بدون نقاط، خط أصغر وأنيق (18)، وحواف زرقاء رفيعة جداً (1.5)
     # =================================================================
     print("[*] Burning Custom Dark Blue Subtitles via FFmpeg...")
     selected_lut = "DEEN.cube" 
@@ -192,11 +192,10 @@ if __name__ == '__main__':
         available_luts = [f for f in os.listdir('.') if f.endswith('.cube')]
         selected_lut = available_luts[0] if available_luts else None
 
-    # التعديلات الهندسية النهائية:
-    # Shadow=0 : (إلغاء الظل تماماً لتصبح الحواف نظيفة مثل الهوك)
-    # Outline=3 : (إطار أزرق قاتم صلب ونظيف)
-    # MarginV=45 : (النسبة الآمنة التي تضع النص تحت السنتر وفوق أزرار تيك توك بدون أن يطير للأعلى)
-    sub_flt = "subtitles=subs.srt:force_style='Fontname=Liberation Sans,Bold=1,Fontsize=24,PrimaryColour=&HFFFFFF&,OutlineColour=&H8B0000&,BackColour=&H000000&,BorderStyle=1,Outline=3,Shadow=0,Alignment=2,MarginL=30,MarginR=30,MarginV=45'"
+    # التعديلات البصرية الصارمة:
+    # Fontsize=18 (حجم أصغر وأرقى)
+    # Outline=1.5 (إطار أزرق رفيع ومتناسق تماماً)
+    sub_flt = "subtitles=subs.srt:force_style='Fontname=Liberation Sans,Bold=1,Fontsize=18,PrimaryColour=&HFFFFFF&,OutlineColour=&H8B0000&,BackColour=&H000000&,BorderStyle=1,Outline=1.5,Shadow=0,Alignment=2,MarginL=30,MarginR=30,MarginV=45'"
     
     vf_filters = sub_flt
     if selected_lut: vf_filters += f",lut3d={selected_lut}"
