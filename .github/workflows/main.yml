@@ -4,6 +4,12 @@ on:
   repository_dispatch:
     types: [generate_video]
 
+# =================================================================
+# 🛡️ درع التحديث: إجبار السيرفر على استخدام Node 24 لتجنب التوقف الكارثي
+# =================================================================
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build_video:
     runs-on: ubuntu-latest
