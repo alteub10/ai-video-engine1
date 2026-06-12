@@ -1,119 +1,9 @@
-import os
-import sys
-import requests
-import gc
-import subprocess
-import re
+    import os
+    import gc
+    import shutil
+    import subprocess
 
-# =================================================================
-# 1. الوضع المنعزل: تشغيل الذكاء الاصطناعي في بيئة مغلقة ثم تدميرها
-# =================================================================
-if len(sys.argv) > 1 and sys.argv[1] == '--transcribe':
-    import warnings
-    warnings.filterwarnings("ignore")
-    
-    try:
-        from faster_whisper import WhisperModel
-    except ModuleNotFoundError:
-        print("[*] faster_whisper not found! Installing it automatically...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "faster-whisper"])
-        from faster_whisper import WhisperModel
-
-    def format_time(seconds):
-        hours = int(seconds // 3600)
-        minutes = int((seconds % 3600) // 60)
-        secs = int(seconds % 60)
-        millis = int(round((seconds - int(seconds)) * 1000))
-        return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
-
-    print("\n[*] Sub-Process: Transcribing with Faster-Whisper (CPU Optimized)...")
-    model = WhisperModel("tiny.en", device="cpu", compute_type="int8")
-    segments, info = model.transcribe("audio.mp3", word_timestamps=True)
-
-    with open("subs.srt", "w", encoding="utf-8") as srt_file:
-        sub_idx = 1
-        for segment in segments:
-            chunk = []
-            for i, word in enumerate(segment.words):
-                if not chunk:
-                    chunk_start = word.start
-                
-                # إزالة النقاط والفواصل وعلامات الترقيم من الترجمة نهائياً
-                clean_word = re.sub(r'[.,!?;:]', '', word.word.strip().upper())
-                chunk.append(clean_word)
-                
-                # كلمتين فقط كحد أقصى لضمان بقاء النص قوياً وفي سطر واحد
-                if len(chunk) == 2 or i == len(segment.words) - 1:
-                    chunk_end = word.end
-                    srt_file.write(f"{sub_idx}\n{format_time(chunk_start)} --> {format_time(chunk_end)}\n{' '.join(chunk)}\n\n")
-                    sub_idx += 1
-                    chunk = []
-                    
-    print("[*] Sub-Process: Transcription complete. Self-destructing to free 100% RAM.\n")
-    sys.exit(0)
-
-# =================================================================
-# 2. الكود الرئيسي (Main Process) - إدارة السيرفر والمونتاج
-# =================================================================
-def download_file(url, filename):
-    if not url or url.strip() == "":
-        url = "https://videos.pexels.com/video-files/5938927/5938927-hd_1080_1920_25fps.mp4"
-    if "tmpfiles.org" in url and "/dl/" not in url:
-        url = url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
-    print(f"[*] Downloading {filename}...")
-    try:
-        r = requests.get(url, stream=True, timeout=15)
-        r.raise_for_status()
-        with open(filename, 'wb') as f:
-            for chunk in r.iter_content(chunk_size=8192):
-                if chunk: f.write(chunk)
-    except Exception as e:
-        print(f"[!] Error downloading {filename}: {e}")
-
-if __name__ == '__main__':
-    audio_url = os.environ.get("AUDIO_URL", "")
-    video_string = os.environ.get("VIDEO_URLS", "")
-    topic_name = os.environ.get("TOPIC_NAME", "Unknown Topic").lower()
-    cut_duration = float(os.environ.get("MAX_CLIP_DURATION", 2.5))
-    target_w, target_h = 1080, 1920
-
-    # جلب الهوك وإزالة النقاط والفواصل منه تماماً
-    raw_hook = os.environ.get("HOOK_TEXT", "MYSTERY").upper().replace("'", "")
-    hook_text = re.sub(r'[.,!?;:]', '', raw_hook)
-
-    if not audio_url or not video_string:
-        print("CRITICAL ERROR: Data missing!")
-        sys.exit(1)
-
-    download_file(audio_url, "audio.mp3")
-    v_urls = video_string.split("|")
-    downloaded_files = []
-    for i, url in enumerate(v_urls):
-        fname = f"v{i+1}.mp4"
-        download_file(url, fname)
-        downloaded_files.append(fname)
-
-    # تشغيل الترجمة في مسار معزول لحماية الرام
-    subprocess.run([sys.executable, __file__, '--transcribe'], check=True)
-    print("[*] Back to Main: AI RAM fully reclaimed by OS.")
-
-    print("[*] Loading MoviePy for Video Editing...")
-    from moviepy.editor import VideoFileClip, AudioFileClip, CompositeAudioClip, concatenate_videoclips, TextClip, CompositeVideoClip, ColorClip
-    import moviepy.video.fx.all as vfx
-    import moviepy.audio.fx.all as afx
-
-    main_audio = AudioFileClip("audio.mp3")
-    total_audio_time = main_audio.duration
-
-    run_number = int(os.environ.get('GITHUB_RUN_NUMBER', 1))
-    bg_music_files = [f"bg{i}.mp3" for i in range(2, 41)]
-    selected_bg = bg_music_files[(run_number - 1) % len(bg_music_files)]
-
-    try:
-        bg_audio = AudioFileClip(selected_bg).fx(afx.volumex, 0.08).fx(afx.audio_loop, duration=total_audio_time)
-        final_audio = CompositeAudioClip([main_audio, bg_audio])
-    except Exception:
-        final_audio = main_audio
+    final_audio = main_audio
 
     def process_clip_safely(filename, target_duration):
         clip = VideoFileClip(filename).without_audio()
@@ -180,7 +70,7 @@ if __name__ == '__main__':
     gc.collect()
 
     # =================================================================
-    # الترجمة السفلية: بدون نقاط، خط أصغر وأنيق (18)، وحواف زرقاء رفيعة جداً (1.5)
+    # الترجمة السفلية وفلاتر الألوان (نظام ذكي ومحصن ضد الأعطال)
     # =================================================================
     print("[*] Burning Custom Dark Blue Subtitles via FFmpeg...")
     selected_lut = "DEEN.cube" 
@@ -192,16 +82,38 @@ if __name__ == '__main__':
         available_luts = [f for f in os.listdir('.') if f.endswith('.cube')]
         selected_lut = available_luts[0] if available_luts else None
 
-    # التعديلات البصرية الصارمة:
-    # Fontsize=18 (حجم أصغر وأرقى)
-    # Outline=1.5 (إطار أزرق رفيع ومتناسق تماماً)
-    sub_flt = "subtitles=subs.srt:force_style='Fontname=Liberation Sans,Bold=1,Fontsize=18,PrimaryColour=&HFFFFFF&,OutlineColour=&H8B0000&,BackColour=&H000000&,BorderStyle=1,Outline=1.5,Shadow=0,Alignment=2,MarginL=30,MarginR=30,MarginV=45'"
-    
-    vf_filters = sub_flt
-    if selected_lut: vf_filters += f",lut3d={selected_lut}"
+    # بناء قائمة الفلاتر بشكل آمن وديناميكي
+    filters_list = []
+
+    # 1️⃣ الحماية القصوى: تحقق من وجود ملف الترجمة وحجمه قبل تمريره
+    if os.path.exists("subs.srt") and os.path.getsize("subs.srt") > 0:
+        sub_style = "force_style='Fontname=Liberation Sans,Bold=1,Fontsize=18,PrimaryColour=&HFFFFFF&,OutlineColour=&H8B0000&,BackColour=&H000000&,BorderStyle=1,Outline=1.5,Shadow=0,Alignment=2,MarginL=30,MarginR=30,MarginV=45'"
+        filters_list.append(f"subtitles=subs.srt:{sub_style}")
+    else:
+        print("[⚠️] WARNING: 'subs.srt' missing or empty! Rendering video WITHOUT subtitles.")
+
+    # 2️⃣ إضافة فلتر الألوان (LUT)
+    if selected_lut: 
+        filters_list.append(f"lut3d={selected_lut}")
 
     final_output = "final_shorts.mp4"
-    cmd_final = ['ffmpeg', '-y', '-i', 'temp_base.mp4', '-vf', vf_filters, '-c:a', 'copy', '-threads', '2', final_output]
+    cmd_final = ['ffmpeg', '-y', '-i', 'temp_base.mp4']
 
-    subprocess.run(cmd_final, check=True)
-    print("\n[+] SUCCESS: Video generated with perfect Layout and Clean Borders! [+]")
+    # تمرير الفلاتر فقط إذا كانت القائمة غير فارغة
+    if filters_list:
+        vf_filters = ",".join(filters_list)
+        cmd_final.extend(['-vf', vf_filters])
+    
+    cmd_final.extend(['-c:a', 'copy', '-threads', '2', final_output])
+
+    # 3️⃣ تنفيذ أمر FFmpeg بأمان مع بروتوكول طوارئ لإنقاذ الفيديو
+    try:
+        subprocess.run(cmd_final, check=True)
+        print("\n[+] SUCCESS: Video generated with perfect Layout and Clean Borders! [+]")
+    except subprocess.CalledProcessError as e:
+        print(f"\n[❌] FFmpeg Failed with error: {e}")
+        print("[⚡] INITIATING EMERGENCY FALLBACK: Bypassing FFmpeg...")
+        # إذا تعطل FFmpeg لأي سبب، ننسخ الفيديو الأساسي كفيديو نهائي لإنقاذ النشر
+        shutil.copy("temp_base.mp4", final_output)
+        print("[+] EMERGENCY SUCCESS: Temp video saved as final_shorts.mp4. Ready for upload!")
+
