@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import urllib.request
 import requests
+import re
 from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip, concatenate_videoclips, AudioFileClip, vfx
 from faster_whisper import WhisperModel
 
@@ -16,14 +17,16 @@ print("[*] Initializing AI Video Engine...")
 target_w = 1080
 target_h = 1920
 cut_duration = float(os.environ.get("MAX_CLIP_DURATION", 4.0))
-
-hook_text = os.environ.get("HOOK_TEXT", "CLASSIFIED ARCHIVE")
 topic_name = os.environ.get("TOPIC_NAME", "unknown")
+
+# جلب الهوك ومسح أي نقاط أو فواصل منه برمجياً لحماية الشاشة
+raw_hook = os.environ.get("HOOK_TEXT", "CLASSIFIED ARCHIVE")
+hook_text = re.sub(r'[^\w\s]', '', raw_hook).strip()
 
 audio_url = os.environ.get("AUDIO_URL", "")
 video_urls_raw = os.environ.get("VIDEO_URLS", "[]")
 
-# تنظيف الروابط: تحويل علامة | إلى فاصلة عادية لضمان قراءة روابط Pexels بشكل سليم
+# تنظيف الروابط
 try:
     video_urls = json.loads(video_urls_raw)
 except Exception:
@@ -31,9 +34,8 @@ except Exception:
     video_urls = [url.strip() for url in clean_raw.split(",") if url.strip()]
 
 # =================================================================
-# 2️⃣ تحميل الملفات (مع تخطي حماية 403 Forbidden)
+# 2️⃣ تحميل الملفات (مع تخطي حماية السيرفرات)
 # =================================================================
-# قناع المتصفح لخداع سيرفرات Pexels وتخطي الحظر
 headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 }
@@ -58,7 +60,7 @@ total_audio_time = main_audio.duration
 final_audio = main_audio
 
 downloaded_files = []
-print(f"[*] Downloading {len(video_urls)} b-roll video clips from Pexels/Creatomate...")
+print(f"[*] Downloading {len(video_urls)} b-roll video clips...")
 for idx, url in enumerate(video_urls):
     v_path = f"video_{idx}.mp4"
     try:
@@ -80,30 +82,50 @@ if not downloaded_files:
     exit(1)
 
 # =================================================================
-# 3️⃣ توليد ملف الترجمة الصامتة باستخدام Faster-Whisper
+# 3️⃣ توليد الترجمة (كلمتين فقط في الشاشة وبدون فواصل أو نقاط)
 # =================================================================
 print("[*] Running Faster-Whisper AI for Transcribing...")
 try:
     model = WhisperModel("tiny", device="cpu", compute_type="int8")
-    segments, info = model.transcribe(audio_path, beam_size=5)
+    segments, info = model.transcribe(audio_path, beam_size=5, word_timestamps=True)
     
     with open("subs.srt", "w", encoding="utf-8") as f:
-        for index, segment in enumerate(segments, start=1):
-            start_h = int(segment.start // 3600)
-            start_m = int((segment.start % 3600) // 60)
-            start_s = segment.start % 60
-            start_ms = int((start_s - int(start_s)) * 1000)
+        sub_idx = 1
+        for segment in segments:
+            if not segment.words:
+                continue
             
-            end_h = int(segment.end // 3600)
-            end_m = int((segment.end % 3600) // 60)
-            end_s = segment.end % 60
-            end_ms = int((end_s - int(end_s)) * 1000)
-            
-            f.write(f"{index}\n")
-            f.write(f"{start_h:02d}:{start_m:02d}:{int(start_s):02d},{start_ms:03d} --> ")
-            f.write(f"{end_h:02d}:{end_m:02d}:{int(end_s):02d},{end_ms:03d}\n")
-            f.write(f"{segment.text.strip()}\n\n")
-    print("[+] Subtitles 'subs.srt' generated successfully.")
+            # تقطيع الكلمات إلى مجموعات من كلمتين
+            chunk_size = 2
+            for i in range(0, len(segment.words), chunk_size):
+                chunk = segment.words[i:i+chunk_size]
+                start_time = chunk[0].start
+                end_time = chunk[-1].end
+                
+                # تجميع الكلمات ومسح علامات الترقيم بالكامل
+                raw_text = " ".join([w.word for w in chunk])
+                clean_text = re.sub(r'[^\w\s]', '', raw_text).strip()
+                
+                if not clean_text:
+                    continue
+                
+                start_h = int(start_time // 3600)
+                start_m = int((start_time % 3600) // 60)
+                start_s = start_time % 60
+                start_ms = int((start_s - int(start_s)) * 1000)
+                
+                end_h = int(end_time // 3600)
+                end_m = int((end_time % 3600) // 60)
+                end_s = end_time % 60
+                end_ms = int((end_s - int(end_s)) * 1000)
+                
+                f.write(f"{sub_idx}\n")
+                f.write(f"{start_h:02d}:{start_m:02d}:{int(start_s):02d},{start_ms:03d} --> ")
+                f.write(f"{end_h:02d}:{end_m:02d}:{int(end_s):02d},{end_ms:03d}\n")
+                f.write(f"{clean_text}\n\n")
+                sub_idx += 1
+                
+    print("[+] Subtitles 'subs.srt' generated perfectly (2 words per screen, no punctuation).")
 except Exception as e:
     print(f"[⚠️] Faster-Whisper failed or skipped: {e}. Moving forward safely.")
 
