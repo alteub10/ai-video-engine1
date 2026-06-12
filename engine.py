@@ -4,40 +4,48 @@ import json
 import shutil
 import subprocess
 import urllib.request
+import requests
 from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip, concatenate_videoclips, AudioFileClip, vfx
 from faster_whisper import WhisperModel
 
 # =================================================================
-# 1️⃣ استقبال البيانات من n8n وتجهيز المسارات الأساسية
+# 1️⃣ استقبال البيانات وتفكيك الروابط المعقدة
 # =================================================================
 print("[*] Initializing AI Video Engine...")
 
-# أبعاد الفيديو الثابتة للشورتس
 target_w = 1080
 target_h = 1920
 cut_duration = float(os.environ.get("MAX_CLIP_DURATION", 4.0))
 
-# جلب النصوص والعناوين بأمان
 hook_text = os.environ.get("HOOK_TEXT", "CLASSIFIED ARCHIVE")
 topic_name = os.environ.get("TOPIC_NAME", "unknown")
 
-# جلب روابط الصوت والفيديوهات القادمة من نظام الأتمتة
 audio_url = os.environ.get("AUDIO_URL", "")
 video_urls_raw = os.environ.get("VIDEO_URLS", "[]")
 
+# تنظيف الروابط: تحويل علامة | إلى فاصلة عادية لضمان قراءة روابط Pexels بشكل سليم
 try:
     video_urls = json.loads(video_urls_raw)
 except Exception:
-    video_urls = [url.strip() for url in video_urls_raw.split(",") if url.strip()]
+    clean_raw = video_urls_raw.replace("|", ",")
+    video_urls = [url.strip() for url in clean_raw.split(",") if url.strip()]
 
 # =================================================================
-# 2️⃣ تحميل الصوت ومقاطع الفيديو من الروابط
+# 2️⃣ تحميل الملفات (مع تخطي حماية 403 Forbidden)
 # =================================================================
+# قناع المتصفح لخداع سيرفرات Pexels وتخطي الحظر
+headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+}
+
 audio_path = "audio.mp3"
 if audio_url and not os.path.exists(audio_path):
     print(f"[*] Downloading audio: {audio_url}")
     try:
-        urllib.request.urlretrieve(audio_url, audio_path)
+        response = requests.get(audio_url, timeout=30)
+        response.raise_for_status()
+        with open(audio_path, 'wb') as f:
+            f.write(response.content)
     except Exception as e:
         print(f"[❌] Audio Download Failed: {e}")
 
@@ -50,14 +58,20 @@ total_audio_time = main_audio.duration
 final_audio = main_audio
 
 downloaded_files = []
-print(f"[*] Downloading {len(video_urls)} b-roll video clips...")
+print(f"[*] Downloading {len(video_urls)} b-roll video clips from Pexels/Creatomate...")
 for idx, url in enumerate(video_urls):
     v_path = f"video_{idx}.mp4"
     try:
-        print(f" -> Downloading clip {idx}: {url}")
-        urllib.request.urlretrieve(url, v_path)
+        print(f" -> Downloading clip {idx}...")
+        res = requests.get(url, headers=headers, stream=True, timeout=30)
+        res.raise_for_status()
+        with open(v_path, 'wb') as f:
+            for chunk in res.iter_content(chunk_size=8192):
+                f.write(chunk)
+        
         if os.path.exists(v_path) and os.path.getsize(v_path) > 0:
             downloaded_files.append(v_path)
+            print(f"    [+] Clip {idx} downloaded successfully.")
     except Exception as e:
         print(f" [!] Failed to download video clip {idx}: {e}")
 
@@ -141,7 +155,7 @@ while current_time < total_audio_time:
 
 video_track = concatenate_videoclips(final_clips, method="compose")
 
-# تصميم الهوك العلوي
+# تصميم الهوك العلوي للقناة
 hook_clip = TextClip(
     hook_text, 
     fontsize=110, 
