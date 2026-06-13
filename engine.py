@@ -1,16 +1,16 @@
 import os
 import gc
 import json
+import random
 import shutil
 import subprocess
-import urllib.request
 import requests
 import re
-from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip, concatenate_videoclips, AudioFileClip, vfx
+from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip, concatenate_videoclips, AudioFileClip, vfx, CompositeAudioClip
 from faster_whisper import WhisperModel
 
 # =================================================================
-# 1️⃣ استقبال البيانات وتفكيك الروابط المعقدة
+# 1️⃣ استقبال البيانات وتجهيز المتغيرات الأساسية
 # =================================================================
 print("[*] Initializing AI Video Engine...")
 
@@ -19,14 +19,14 @@ target_h = 1920
 cut_duration = float(os.environ.get("MAX_CLIP_DURATION", 4.0))
 topic_name = os.environ.get("TOPIC_NAME", "unknown")
 
-# جلب الهوك ومسح أي نقاط أو فواصل منه برمجياً لحماية الشاشة
+# جلب نص الهوك ومسح علامات الترقيم منه نهائياً لحماية المظهر العلوي
 raw_hook = os.environ.get("HOOK_TEXT", "CLASSIFIED ARCHIVE")
 hook_text = re.sub(r'[^\w\s]', '', raw_hook).strip()
 
 audio_url = os.environ.get("AUDIO_URL", "")
 video_urls_raw = os.environ.get("VIDEO_URLS", "[]")
 
-# تنظيف الروابط
+# تنظيف وتفكيك روابط الفيديوهات القادمة من n8n
 try:
     video_urls = json.loads(video_urls_raw)
 except Exception:
@@ -34,7 +34,7 @@ except Exception:
     video_urls = [url.strip() for url in clean_raw.split(",") if url.strip()]
 
 # =================================================================
-# 2️⃣ تحميل الملفات (مع تخطي حماية السيرفرات)
+# 2️⃣ تحميل صوت التعليق الأساسي
 # =================================================================
 headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
@@ -42,12 +42,12 @@ headers = {
 
 audio_path = "audio.mp3"
 if audio_url and not os.path.exists(audio_path):
-    print(f"[*] Downloading audio: {audio_url}")
+    print(f"[*] Downloading main voiceover: {audio_url}")
     try:
-        response = requests.get(audio_url, timeout=30)
-        response.raise_for_status()
+        res_audio = requests.get(audio_url, headers=headers, timeout=30)
+        res_audio.raise_for_status()
         with open(audio_path, 'wb') as f:
-            f.write(response.content)
+            f.write(res_audio.content)
     except Exception as e:
         print(f"[❌] Audio Download Failed: {e}")
 
@@ -56,33 +56,37 @@ if not os.path.exists(audio_path):
     exit(1)
 
 main_audio = AudioFileClip(audio_path)
-total_audio_time = main_audio.duration
-final_audio = main_audio
-
-downloaded_files = []
-print(f"[*] Downloading {len(video_urls)} b-roll video clips...")
-for idx, url in enumerate(video_urls):
-    v_path = f"video_{idx}.mp4"
-    try:
-        print(f" -> Downloading clip {idx}...")
-        res = requests.get(url, headers=headers, stream=True, timeout=30)
-        res.raise_for_status()
-        with open(v_path, 'wb') as f:
-            for chunk in res.iter_content(chunk_size=8192):
-                f.write(chunk)
-        
-        if os.path.exists(v_path) and os.path.getsize(v_path) > 0:
-            downloaded_files.append(v_path)
-            print(f"    [+] Clip {idx} downloaded successfully.")
-    except Exception as e:
-        print(f" [!] Failed to download video clip {idx}: {e}")
-
-if not downloaded_files:
-    print("[❌] FATAL: No background videos downloaded. Exiting.")
-    exit(1)
 
 # =================================================================
-# 3️⃣ توليد الترجمة (كلمتين فقط في الشاشة وبدون فواصل أو نقاط)
+# 3️⃣ محرك الموسيقى الذكي (البحث في الخارج وتجنب التكرار المتتالي)
+# =================================================================
+run_id = int(os.environ.get("GITHUB_RUN_NUMBER", random.randint(1, 1000)))
+# البحث عن ملفات الموسيقى في المجلد الرئيسي الحالي مباشرة (.) وتجنب ملف التعليق
+all_music = [f for f in os.listdir('.') if f.endswith(('.mp3', '.wav')) and f != "audio.mp3"]
+
+selected_music = None
+if all_music:
+    # اختيار الملف بالتناوب بناءً على رقم تشغيل السيرفر لضمان عدم التكرار
+    selected_music = all_music[run_id % len(all_music)]
+    print(f"[*] Mixing with background music: {selected_music}")
+
+# دمج الموسيقى الخلفية مع التعليق الصوتي إذا وجدت
+if selected_music:
+    try:
+        bg_music = AudioFileClip(selected_music).volumex(0.12)
+        # قص الموسيقى لتناسب مدة التعليق الصوتي تماماً
+        bg_music = bg_music.subclip(0, min(bg_music.duration, main_audio.duration))
+        final_audio = CompositeAudioClip([main_audio, bg_music.set_start(0)])
+    except Exception as e:
+        print(f"[⚠️] Failed to mix music, playing raw voiceover: {e}")
+        final_audio = main_audio
+else:
+    final_audio = main_audio
+
+total_audio_time = final_audio.duration
+
+# =================================================================
+# 4️⃣ توليد الترجمة الصامتة (كلمتين فقط في الشاشة وبدون علامات ترقيم)
 # =================================================================
 print("[*] Running Faster-Whisper AI for Transcribing...")
 try:
@@ -95,14 +99,14 @@ try:
             if not segment.words:
                 continue
             
-            # تقطيع الكلمات إلى مجموعات من كلمتين
+            # تجميع كل كلمتين معاً في دفعة واحدة
             chunk_size = 2
             for i in range(0, len(segment.words), chunk_size):
                 chunk = segment.words[i:i+chunk_size]
                 start_time = chunk[0].start
                 end_time = chunk[-1].end
                 
-                # تجميع الكلمات ومسح علامات الترقيم بالكامل
+                # دمج الكلمات ومسح النقاط والفواصل برمجياً
                 raw_text = " ".join([w.word for w in chunk])
                 clean_text = re.sub(r'[^\w\s]', '', raw_text).strip()
                 
@@ -111,26 +115,26 @@ try:
                 
                 start_h = int(start_time // 3600)
                 start_m = int((start_time % 3600) // 60)
-                start_s = start_time % 60
-                start_ms = int((start_s - int(start_s)) * 1000)
+                start_s = int(start_time % 60)
+                start_ms = int((start_time % 1) * 1000)
                 
                 end_h = int(end_time // 3600)
                 end_m = int((end_time % 3600) // 60)
-                end_s = end_time % 60
-                end_ms = int((end_s - int(end_s)) * 1000)
+                end_s = int(end_time % 60)
+                end_ms = int((end_time % 1) * 1000)
                 
                 f.write(f"{sub_idx}\n")
-                f.write(f"{start_h:02d}:{start_m:02d}:{int(start_s):02d},{start_ms:03d} --> ")
-                f.write(f"{end_h:02d}:{end_m:02d}:{int(end_s):02d},{end_ms:03d}\n")
+                f.write(f"{start_h:02d}:{start_m:02d}:{start_s:02d},{start_ms:03d} --> ")
+                f.write(f"{end_h:02d}:{end_m:02d}:{end_s:02d},{end_ms:03d}\n")
                 f.write(f"{clean_text}\n\n")
                 sub_idx += 1
                 
-    print("[+] Subtitles 'subs.srt' generated perfectly (2 words per screen, no punctuation).")
+    print("[+] Subtitles 'subs.srt' generated perfectly.")
 except Exception as e:
     print(f"[⚠️] Faster-Whisper failed or skipped: {e}. Moving forward safely.")
 
 # =================================================================
-# 4️⃣ دالة معالجة وقص مقاطع الفيديو (تعديل الأبعاد والمحاذاة)
+# 5️⃣ دالة معالجة وتحجيم مقاطع الفيديو الفرعية الذكية
 # =================================================================
 def process_clip_safely(filename, target_duration):
     clip = VideoFileClip(filename).without_audio()
@@ -148,20 +152,37 @@ def process_clip_safely(filename, target_duration):
         clip = clip.resize(width=target_w)
         clip = clip.crop(y_center=clip.h / 2, height=target_h)
 
-    clip = clip.fx(vfx.colorx, 0.80)
+    # تعتيم خفيف بنسبة 10% لزيادة وضوح النصوص والترجمة مع الحفاظ على الألوان
+    clip = clip.fx(vfx.colorx, 0.90)
     return clip
 
 # =================================================================
-# 5️⃣ بناء التايم لاين والمونتاج التلقائي
+# 6️⃣ تحميل لقطات B-roll وبناء خط التايم لاين الأساسي
 # =================================================================
+downloaded_files = []
+print(f"[*] Downloading {len(video_urls)} background video clips...")
+for idx, url in enumerate(video_urls):
+    v_path = f"video_{idx}.mp4"
+    try:
+        res_v = requests.get(url, headers=headers, stream=True, timeout=30)
+        res_v.raise_for_status()
+        with open(v_path, 'wb') as f:
+            for chunk in res_v.iter_content(chunk_size=8192):
+                f.write(chunk)
+        if os.path.exists(v_path) and os.path.getsize(v_path) > 0:
+            downloaded_files.append(v_path)
+    except Exception as e:
+        print(f" [!] Failed to download video clip {idx}: {e}")
+
+if not downloaded_files:
+    print("[❌] FATAL: No background videos downloaded. Exiting.")
+    exit(1)
+
 final_clips = []
 current_time = 0
 pool_index = 0
 
 while current_time < total_audio_time:
-    if not downloaded_files:
-        break
-        
     filename = downloaded_files[pool_index % len(downloaded_files)]
     time_left = total_audio_time - current_time
     duration = min(cut_duration, time_left)
@@ -177,7 +198,7 @@ while current_time < total_audio_time:
 
 video_track = concatenate_videoclips(final_clips, method="compose")
 
-# تصميم الهوك العلوي للقناة
+# تصميم الهوك العلوي النظيف
 hook_clip = TextClip(
     hook_text, 
     fontsize=110, 
@@ -205,7 +226,7 @@ final_video.write_videofile(
     logger=None
 )
 
-# تفريغ الذاكرة فوراً لمنع الانهيار
+# تفريغ الذاكرة فوراً
 video_track.close()
 final_video.close()
 final_audio.close()
@@ -214,7 +235,7 @@ for c in final_clips:
 gc.collect()
 
 # =================================================================
-# 6️⃣ تطبيق فلاتر الألوان والترجمة الاحترافية عبر FFmpeg
+# 7️⃣ حرق الترجمة النظيفة وتطبيق فلاتر الألوان (FFmpeg)
 # =================================================================
 print("[*] Burning Custom Dark Blue Subtitles via FFmpeg...")
 selected_lut = "DEEN.cube" 
@@ -254,7 +275,6 @@ try:
     subprocess.run(cmd_final, check=True)
     print("\n[+] SUCCESS: Video generated with perfect Layout and Clean Borders! [+]")
 except subprocess.CalledProcessError as e:
-    print(f"\n[❌] FFmpeg Failed with error: {e}")
-    print("[⚡] INITIATING EMERGENCY FALLBACK: Bypassing FFmpeg...")
+    print(f"\n[❌] FFmpeg Failed: {e}")
     shutil.copy("temp_base.mp4", final_output)
-    print("[+] EMERGENCY SUCCESS: Temp video saved as final_shorts.mp4. Ready for upload!")
+    print("[+] EMERGENCY SUCCESS: Saved video without filter to prevent failure.")
