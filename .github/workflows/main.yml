@@ -1,5 +1,3 @@
-name: AI Video Engine Auto-Render
-
 on:
   repository_dispatch:
     types: [generate_video]
@@ -65,9 +63,11 @@ jobs:
 
       - name: Save Video as Artifact
         uses: actions/upload-artifact@v4
+        continue-on-error: true # 🛡️ تجاوز الخطأ إذا كانت المساحة ممتلئة لضمان عدم توقف الماكينة
         with:
           name: Final-Shorts-Video
           path: final_shorts.mp4
+          retention-days: 1 # 🗑️ حذف الفيديو القديم تلقائياً بعد 24 ساعة لتوفير مساحة السيرفر دائماً
 
       - name: Send Video to n8n Webhook
         env:
