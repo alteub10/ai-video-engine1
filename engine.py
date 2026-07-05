@@ -211,7 +211,32 @@ hook_clip = TextClip(
 )
 hook_clip = hook_clip.set_position(('center', 200)).set_duration(min(3.0, total_audio_time)).set_start(0)
 
-final_video = CompositeVideoClip([video_track, hook_clip], size=(target_w, target_h))
+# تجهيز الطبقات التي سيتم دمجها
+clips_to_composite = [video_track, hook_clip]
+
+# --- إضافة زر الاشتراك المتحرك مرتين (الثانية 10 والثانية 25) ---
+if os.path.exists("subscribe_anim.mp4"):
+    print("[*] Adding Animated Subscribe Button at 10s and 25s...")
+    try:
+        # تحميل الملف وإزالة الخلفية وتصغير الحجم مرة واحدة
+        base_anim = VideoFileClip("subscribe_anim.mp4")
+        base_anim = base_anim.fx(vfx.mask_color, color=[0, 255, 0], thr=100, s=5)
+        base_anim = base_anim.resize(width=target_w * 0.45)
+        
+        # الظهور الأول في الثانية 10 في المنتصف تماماً
+        if total_audio_time > 10:
+            anim_1 = base_anim.set_start(10).set_position(('center', 'center'))
+            clips_to_composite.append(anim_1)
+            
+        # الظهور الثاني في الثانية 25 في المنتصف تماماً
+        if total_audio_time > 25:
+            anim_2 = base_anim.set_start(25).set_position(('center', 'center'))
+            clips_to_composite.append(anim_2)
+            
+    except Exception as e:
+        print(f"[⚠️] Failed to add subscribe animations: {e}")
+
+final_video = CompositeVideoClip(clips_to_composite, size=(target_w, target_h))
 final_video = final_video.set_audio(final_audio).set_duration(total_audio_time)
 
 print("[*] Rendering Base Timeline...")
@@ -232,6 +257,8 @@ final_video.close()
 final_audio.close()
 for c in final_clips: 
     c.close()
+if 'base_anim' in locals():
+    base_anim.close()
 gc.collect()
 
 # =================================================================
@@ -278,3 +305,4 @@ except subprocess.CalledProcessError as e:
     print(f"\n[❌] FFmpeg Failed: {e}")
     shutil.copy("temp_base.mp4", final_output)
     print("[+] EMERGENCY SUCCESS: Saved video without filter to prevent failure.")
+
