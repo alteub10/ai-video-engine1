@@ -15,8 +15,37 @@ from moviepy.editor import (
 from faster_whisper import WhisperModel
 
 # =================================================================
-# [0] 🛠️ System Setup & Logging Configuration
+# [0] Fix changelog (read me first)
 # =================================================================
+# Root cause of the "Media type 'text/html' is not supported" / YouTube
+# Uploader "Bad request" error in n8n:
+#   1) tmpfiles.org deletes files after 60 minutes BY DEFAULT. The old
+#      upload call never sent the `expire` field, so every render used
+#      the shortest possible TTL. Any delay in the pipeline (webhook
+#      queueing, retries, n8n cold start on Render.com free tier, etc.)
+#      could push the download past that 60-minute window.
+#   2) When a tmpfiles.org link is dead, it returns a small HTML page
+#      (not a 404 with a clear video/absent body) instead of the MP4.
+#      The old script trusted ANY link returned by the upload API
+#      without ever confirming the link actually served a video, so a
+#      dead/blocked link was passed to n8n and then to YouTube as if it
+#      were valid.
+#
+# What changed below:
+#   - tmpfiles.org upload now requests a 6-hour TTL instead of the
+#     default 60 minutes.
+#   - New verify_remote_file() re-fetches every candidate link right
+#     after upload and rejects it if it's HTML/JSON or clearly too
+#     small, BEFORE the script ever reports success.
+#   - The 3-provider fallback (Uguu.se -> tmpfiles.org -> Catbox.moe)
+#     now loops through providers until one is verified, instead of
+#     stopping at the first URL returned.
+#   - download_with_retry() also sniffs the first bytes of anything it
+#     downloads so an HTML error page can never silently be saved as if
+#     it were audio/video (this protects AUDIO_URL / VIDEO_URLS inputs
+#     from the same failure class).
+# =================================================================
+
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -47,7 +76,7 @@ def track_clip(clip):
     return clip
 
 # =================================================================
-# [1] 📥 Variables & Data Ingestion
+# [1] Variables & Data Ingestion
 # =================================================================
 target_w = 1080
 target_h = 1920
@@ -81,7 +110,7 @@ headers = {
 }
 
 # =================================================================
-# 🌐 Robust Unified Downloader
+# Robust Unified Downloader
 # =================================================================
 def download_with_retry(url, dest_path, attempts=3, timeout=30, stream=False):
     for attempt in range(1, attempts + 1):
@@ -91,25 +120,74 @@ def download_with_retry(url, dest_path, attempts=3, timeout=30, stream=False):
             with open(dest_path, 'wb') as f:
                 if stream:
                     for chunk in res.iter_content(chunk_size=8192):
-                        if chunk: f.write(chunk)
+                        if chunk:
+                            f.write(chunk)
                 else:
                     f.write(res.content)
-            
+
             if os.path.exists(dest_path) and os.path.getsize(dest_path) > 1024:
-                return True
-            logger.warning(f"Downloaded file empty or corrupted: {dest_path} (Attempt {attempt}/{attempts})")
+                # 🔧 FIX: a >1KB file used to be trusted blindly. An HTML
+                # error/expired page from a free host is easily >1KB, so
+                # sniff the first bytes before accepting the download.
+                with open(dest_path, 'rb') as check_f:
+                    head_bytes = check_f.read(512).lower()
+                if b"<html" in head_bytes or b"<!doctype html" in head_bytes:
+                    logger.warning(
+                        f"Downloaded file looks like an HTML page, not media: "
+                        f"{dest_path} (Attempt {attempt}/{attempts})"
+                    )
+                    os.remove(dest_path)
+                else:
+                    return True
+            else:
+                logger.warning(f"Downloaded file empty or corrupted: {dest_path} (Attempt {attempt}/{attempts})")
         except Exception as e:
             logger.warning(f"Download attempt {attempt}/{attempts} failed for {url}: {str(e)}")
-        
+
         if attempt < attempts:
             time.sleep(2)
-            
+
     if os.path.exists(dest_path):
         os.remove(dest_path)
     return False
 
+
+def verify_remote_file(url, expected_min_bytes=200_000, timeout=20):
+    """
+    🔧 NEW: Re-fetches a just-uploaded URL and confirms it actually
+    serves the video before the pipeline trusts it. Returns False if
+    the host answers with HTML/JSON (expired link, anti-bot page,
+    error page) or with a suspiciously small body.
+    """
+    try:
+        with requests.get(url, headers=headers, timeout=timeout, stream=True) as res:
+            if res.status_code != 200:
+                logger.warning(f"Verify failed: HTTP {res.status_code} for {url}")
+                return False
+
+            content_type = res.headers.get("Content-Type", "").lower()
+            if "html" in content_type or "json" in content_type:
+                logger.warning(f"Verify failed: server returned '{content_type}' instead of a video for {url}")
+                return False
+
+            content_length = int(res.headers.get("Content-Length", 0) or 0)
+            if content_length and content_length < expected_min_bytes:
+                logger.warning(f"Verify failed: remote file too small ({content_length} bytes) for {url}")
+                return False
+
+            if not content_length:
+                first_chunk = next(res.iter_content(chunk_size=4096), b"")
+                if b"<html" in first_chunk.lower() or b"<!doctype" in first_chunk.lower():
+                    logger.warning(f"Verify failed: response body looks like HTML for {url}")
+                    return False
+
+            return True
+    except Exception as e:
+        logger.warning(f"Verify request failed for {url}: {e}")
+        return False
+
 # =================================================================
-# [2] 🎙️ Main Audio Processing
+# [2] Main Audio Processing
 # =================================================================
 audio_path = "audio.mp3"
 logger.info(f"Downloading main voiceover: {audio_url}")
@@ -125,7 +203,7 @@ except Exception as e:
     exit(1)
 
 # =================================================================
-# [3] 🎵 Smart Background Music Mixer
+# [3] Smart Background Music Mixer
 # =================================================================
 run_id = int(os.environ.get("GITHUB_RUN_NUMBER", random.randint(1, 1000)))
 all_music = [f for f in os.listdir('.') if f.endswith(('.mp3', '.wav')) and f != "audio.mp3"]
@@ -151,45 +229,45 @@ if total_audio_time <= 0:
     exit(1)
 
 # =================================================================
-# [4] 📝 Faster-Whisper Silent Subtitles
+# [4] Faster-Whisper Silent Subtitles
 # =================================================================
 logger.info("Running Faster-Whisper AI for Transcribing...")
 try:
     model = WhisperModel("tiny", device="cpu", compute_type="int8")
     segments, info = model.transcribe(audio_path, beam_size=5, word_timestamps=True)
 
-    with open("subs.srt", "w", encoding="utf-8") as f:  
-        sub_idx = 1  
-        for segment in segments:  
-            if not segment.words:  
-                continue  
+    with open("subs.srt", "w", encoding="utf-8") as f:
+        sub_idx = 1
+        for segment in segments:
+            if not segment.words:
+                continue
 
-            chunk_size = 2  
-            for i in range(0, len(segment.words), chunk_size):  
-                chunk = segment.words[i:i+chunk_size]  
-                start_time = chunk[0].start  
-                end_time = chunk[-1].end  
+            chunk_size = 2
+            for i in range(0, len(segment.words), chunk_size):
+                chunk = segment.words[i:i + chunk_size]
+                start_time = chunk[0].start
+                end_time = chunk[-1].end
 
-                raw_text = " ".join([w.word for w in chunk])  
-                clean_text = re.sub(r'[^\w\s]', '', raw_text).strip()  
+                raw_text = " ".join([w.word for w in chunk])
+                clean_text = re.sub(r'[^\w\s]', '', raw_text).strip()
 
-                if not clean_text:  
-                    continue  
+                if not clean_text:
+                    continue
 
                 def fmt_time(t):
                     h, m = int(t // 3600), int((t % 3600) // 60)
                     s, ms = int(t % 60), int((t % 1) * 1000)
                     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
-                f.write(f"{sub_idx}\n{fmt_time(start_time)} --> {fmt_time(end_time)}\n{clean_text}\n\n")  
-                sub_idx += 1  
+                f.write(f"{sub_idx}\n{fmt_time(start_time)} --> {fmt_time(end_time)}\n{clean_text}\n\n")
+                sub_idx += 1
 
     logger.info("Subtitles 'subs.srt' generated perfectly.")
 except Exception as e:
     logger.warning(f"Faster-Whisper failed or skipped: {e}. Moving forward safely without subs.")
 
 # =================================================================
-# [5] ✂️ B-Roll Safe Processing Engine
+# [5] B-Roll Safe Processing Engine
 # =================================================================
 def process_clip_safely(filename, target_duration):
     clip = VideoFileClip(filename).without_audio()
@@ -197,26 +275,26 @@ def process_clip_safely(filename, target_duration):
         clip.close()
         raise ValueError(f"Clip {filename} has invalid/zero duration")
 
-    if clip.duration < target_duration:  
-        clip = clip.fx(vfx.loop, duration=target_duration)  
-    else:  
-        clip = clip.subclip(0, target_duration)  
+    if clip.duration < target_duration:
+        clip = clip.fx(vfx.loop, duration=target_duration)
+    else:
+        clip = clip.subclip(0, target_duration)
 
-    w, h = clip.size  
-    target_ratio = target_w / target_h  
-    
-    if (w / h) > target_ratio:  
-        clip = clip.resize(height=target_h)  
-        clip = clip.crop(x_center=clip.w / 2, width=target_w)  
-    else:  
-        clip = clip.resize(width=target_w)  
-        clip = clip.crop(y_center=clip.h / 2, height=target_h)  
+    w, h = clip.size
+    target_ratio = target_w / target_h
+
+    if (w / h) > target_ratio:
+        clip = clip.resize(height=target_h)
+        clip = clip.crop(x_center=clip.w / 2, width=target_w)
+    else:
+        clip = clip.resize(width=target_w)
+        clip = clip.crop(y_center=clip.h / 2, height=target_h)
 
     clip = clip.fx(vfx.colorx, 0.90)
     return clip
 
 # =================================================================
-# [6] 🎬 Dynamic Timeline Construction
+# [6] Dynamic Timeline Construction
 # =================================================================
 downloaded_files = []
 logger.info(f"Downloading {len(video_urls)} background video clips...")
@@ -234,7 +312,7 @@ if not downloaded_files:
 final_clips = []
 accumulated_duration = 0.0
 pool_index = 0
-max_total_attempts = len(downloaded_files) * 20 
+max_total_attempts = len(downloaded_files) * 20
 attempts_done = 0
 
 logger.info("Building Core Video Timeline based on actual duration...")
@@ -244,15 +322,15 @@ while accumulated_duration < total_audio_time and attempts_done < max_total_atte
     pool_index += 1
     attempts_done += 1
 
-    time_left = total_audio_time - accumulated_duration  
-    duration = min(cut_duration, time_left)  
+    time_left = total_audio_time - accumulated_duration
+    duration = min(cut_duration, time_left)
 
-    try:  
+    try:
         clip = process_clip_safely(filename, duration)
         final_clips.append(clip)
         track_clip(clip)
-        accumulated_duration += duration  
-    except Exception as e:  
+        accumulated_duration += duration
+    except Exception as e:
         logger.warning(f"Error processing {filename}, skipping this slot: {e}")
 
 if not final_clips:
@@ -286,12 +364,12 @@ if os.path.exists(subscribe_file) and os.path.getsize(subscribe_file) > 1024:
     try:
         base_anim = track_clip(VideoFileClip(subscribe_file))
         base_anim = base_anim.fx(vfx.mask_color, color=[0, 255, 0], thr=100, s=5).resize(width=target_w * 0.45)
-        
+
         if total_audio_time > 10:
             clips_to_composite.append(track_clip(base_anim.copy().set_start(10).set_position(('center', 'center'))))
         if total_audio_time > 25:
             clips_to_composite.append(track_clip(base_anim.copy().set_start(25).set_position(('center', 'center'))))
-            
+
         logger.info("Subscribe animations added to timeline successfully.")
     except Exception as e:
         logger.warning(f"Failed to process subscribe animations, skipping: {e}")
@@ -313,13 +391,15 @@ except Exception as e:
 # --- Force Memory Cleanup Before FFmpeg ---
 logger.info("Releasing MoviePy resources to free RAM...")
 for c in open_clips:
-    try: c.close()
-    except: pass
+    try:
+        c.close()
+    except Exception:
+        pass
 open_clips.clear()
 gc.collect()
 
 # =================================================================
-# [7] 🎨 Subtitle Burning & LUT Application (FFmpeg)
+# [7] Subtitle Burning & LUT Application (FFmpeg)
 # =================================================================
 logger.info("Applying FFmpeg Filters (Subtitles + LUT)...")
 selected_lut = "DEEN.cube"
@@ -363,69 +443,93 @@ except subprocess.CalledProcessError as e:
     shutil.copy("temp_base.mp4", final_output)
 
 # =================================================================
-# [8] ☁️ Multi-Provider Robust Upload Manager - UPDATED PRIORITY ORDER
+# [8] Multi-Provider Robust Upload Manager (with post-upload verification)
 # =================================================================
 if not os.path.exists(final_output) or os.path.getsize(final_output) == 0:
     logger.error("FATAL: Output video not found or empty. Cannot upload.")
     exit(1)
 
 logger.info(f"Starting Multi-Provider Upload Manager for {final_output}...")
+local_size = os.path.getsize(final_output)
 direct_link = None
 
-# ✅ ATTEMPT 1: Uguu.se (PRIMARY - Direct .mp4 URL, Perfect for n8n)
-try:
-    logger.info("Upload Attempt 1: Uguu.se [PRIMARY - MAIN SERVER]...")
+
+def upload_uguu():
     with open(final_output, "rb") as f:
         res = requests.post("https://uguu.se/upload.php", files={"files[]": f}, timeout=120)
     if res.status_code == 200:
         data = res.json()
         if data.get('success') and len(data.get('files', [])) > 0:
-            direct_link = data['files'][0]['url']
-            logger.info(f"✅ [SUCCESS] Video Uploaded to Uguu.se: {direct_link}")
-            logger.info(f"📊 Server: Uguu.se | Direct .mp4 link | n8n Compatible")
-except Exception as e:
-    logger.warning(f"❌ Uguu.se upload failed: {e}")
+            return data['files'][0]['url']
+    return None
 
-# ✅ ATTEMPT 2: tmpfiles.org (SECONDARY - Fallback with conversion)
-if not direct_link:
+
+def upload_tmpfiles():
+    with open(final_output, "rb") as f:
+        res = requests.post(
+            "https://tmpfiles.org/api/v1/upload",
+            files={"file": f},
+            # 🔧 FIX: default retention is only 60 minutes. Ask for 6
+            # hours so a slow webhook/n8n round trip can't outlive the link.
+            data={"expire": 21600},
+            timeout=120
+        )
+    if res.status_code == 200:
+        raw_url = res.json().get('data', {}).get('url', '')
+        if raw_url:
+            return raw_url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
+    return None
+
+
+def upload_catbox():
+    with open(final_output, "rb") as f:
+        res = requests.post(
+            "https://catbox.moe/user/api.php",
+            data={"reqtype": "fileupload"},
+            files={"fileToUpload": f},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=120
+        )
+    if res.status_code == 200 and ("http://" in res.text or "https://" in res.text):
+        return res.text.strip()
+    return None
+
+
+providers = [
+    ("Uguu.se [PRIMARY]", upload_uguu),
+    ("tmpfiles.org [SECONDARY]", upload_tmpfiles),
+    ("Catbox.moe [TERTIARY]", upload_catbox),
+]
+
+for name, upload_fn in providers:
+    logger.info(f"Upload Attempt: {name}...")
     try:
-        logger.info("Upload Attempt 2: tmpfiles.org [SECONDARY - FALLBACK]...")
-        with open(final_output, "rb") as f:
-            res = requests.post("https://tmpfiles.org/api/v1/upload", files={"file": f}, timeout=120)
-        if res.status_code == 200:
-            raw_url = res.json().get('data', {}).get('url', '')
-            if raw_url:
-                # Convert to direct MP4 download link suitable for n8n
-                direct_link = raw_url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
-                logger.info(f"✅ [SUCCESS] Video Uploaded to tmpfiles.org: {direct_link}")
-                logger.info(f"📊 Server: tmpfiles.org | Converted to direct link")
+        candidate_url = upload_fn()
     except Exception as e:
-        logger.warning(f"❌ tmpfiles.org upload failed: {e}")
+        logger.warning(f"❌ {name} upload request failed: {e}")
+        continue
 
-# ✅ ATTEMPT 3: Catbox.moe (TERTIARY - Last Resort)
-if not direct_link:
-    try:
-        logger.info("Upload Attempt 3: Catbox.moe [TERTIARY - LAST RESORT]...")
-        with open(final_output, "rb") as f:
-            res = requests.post(
-                "https://catbox.moe/user/api.php", 
-                data={"reqtype": "fileupload"}, 
-                files={"fileToUpload": f}, 
-                headers={"User-Agent": "Mozilla/5.0"},
-                timeout=120
-            )
-        if res.status_code == 200 and ("http://" in res.text or "https://" in res.text):
-            direct_link = res.text.strip()
-            logger.info(f"✅ [SUCCESS] Video Uploaded to Catbox.moe: {direct_link}")
-            logger.info(f"📊 Server: Catbox.moe | Direct link")
-        else:
-            logger.warning(f"❌ Catbox API returned Status: {res.status_code}")
-    except Exception as e:
-        logger.warning(f"❌ Catbox.moe upload failed: {e}")
+    if not candidate_url:
+        logger.warning(f"❌ {name} did not return a usable URL.")
+        continue
 
-# ❌ Final verification - All services failed
+    logger.info(f"{name} returned a link, verifying it actually serves the video before trusting it...")
+    time.sleep(3)  # small grace period for the host to finish processing the upload
+
+    # 🔧 FIX: this is the core of the bug fix. The old code accepted
+    # whatever URL the upload API returned. Now we re-fetch it and
+    # only accept it if it is NOT an HTML/JSON page and is close to
+    # the real file size.
+    if verify_remote_file(candidate_url, expected_min_bytes=int(local_size * 0.5)):
+        direct_link = candidate_url
+        logger.info(f"✅ [VERIFIED] {name} is genuinely serving the video: {direct_link}")
+        break
+    else:
+        logger.warning(f"⚠️ {name} link failed verification (expired/blocked/HTML page). Trying next provider...")
+
+# Final verification - all providers failed
 if not direct_link:
-    logger.error("FATAL: Video upload failed across ALL service providers (Uguu.se, tmpfiles.org, Catbox.moe).")
+    logger.error("FATAL: Video upload+verification failed across ALL service providers (Uguu.se, tmpfiles.org, Catbox.moe).")
     exit(1)
 
 # --- GitHub Actions Output ---
@@ -434,9 +538,9 @@ if github_output_path:
     try:
         with open(github_output_path, "a") as gh_out:
             gh_out.write(f"video_url={direct_link}\n")
-        logger.info(f"✅ GitHub Output written successfully")
+        logger.info("✅ GitHub Output written successfully")
     except Exception as e:
         logger.error(f"Failed to write to GITHUB_OUTPUT: {e}")
 
-logger.info(f"🎉 Process Complete! Final Direct URL: {direct_link}")
-logger.info(f"📤 Upload Priority: Uguu.se → tmpfiles.org → Catbox.moe")
+logger.info(f"🎉 Process Complete! Final Verified Direct URL: {direct_link}")
+logger.info("📤 Upload Priority: Uguu.se → tmpfiles.org (6h TTL) → Catbox.moe, each verified before use")
