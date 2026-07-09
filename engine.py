@@ -363,7 +363,7 @@ except subprocess.CalledProcessError as e:
     shutil.copy("temp_base.mp4", final_output)
 
 # =================================================================
-# [8] ☁️ Multi-Provider Robust Upload Manager
+# [8] ☁️ Multi-Provider Robust Upload Manager - UPDATED PRIORITY ORDER
 # =================================================================
 if not os.path.exists(final_output) or os.path.getsize(final_output) == 0:
     logger.error("FATAL: Output video not found or empty. Cannot upload.")
@@ -372,38 +372,40 @@ if not os.path.exists(final_output) or os.path.getsize(final_output) == 0:
 logger.info(f"Starting Multi-Provider Upload Manager for {final_output}...")
 direct_link = None
 
-# Attempt 1: tmpfiles.org (Extremely reliable for GitHub Actions IPs, provides direct URL)
+# ✅ ATTEMPT 1: Uguu.se (PRIMARY - Direct .mp4 URL, Perfect for n8n)
 try:
-    logger.info("Upload Attempt 1: tmpfiles.org...")
+    logger.info("Upload Attempt 1: Uguu.se [PRIMARY - MAIN SERVER]...")
     with open(final_output, "rb") as f:
-        res = requests.post("https://tmpfiles.org/api/v1/upload", files={"file": f}, timeout=120)
+        res = requests.post("https://uguu.se/upload.php", files={"files[]": f}, timeout=120)
     if res.status_code == 200:
-        raw_url = res.json().get('data', {}).get('url', '')
-        if raw_url:
-            # Convert to direct MP4 download link suitable for n8n
-            direct_link = raw_url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
-            logger.info(f"[SUCCESS] Video Uploaded to tmpfiles.org: {direct_link}")
+        data = res.json()
+        if data.get('success') and len(data.get('files', [])) > 0:
+            direct_link = data['files'][0]['url']
+            logger.info(f"✅ [SUCCESS] Video Uploaded to Uguu.se: {direct_link}")
+            logger.info(f"📊 Server: Uguu.se | Direct .mp4 link | n8n Compatible")
 except Exception as e:
-    logger.warning(f"tmpfiles.org upload failed: {e}")
+    logger.warning(f"❌ Uguu.se upload failed: {e}")
 
-# Attempt 2: Uguu.se (Fallback if tmpfiles fails)
+# ✅ ATTEMPT 2: tmpfiles.org (SECONDARY - Fallback with conversion)
 if not direct_link:
     try:
-        logger.info("Upload Attempt 2: Uguu.se...")
+        logger.info("Upload Attempt 2: tmpfiles.org [SECONDARY - FALLBACK]...")
         with open(final_output, "rb") as f:
-            res = requests.post("https://uguu.se/upload.php", files={"files[]": f}, timeout=120)
+            res = requests.post("https://tmpfiles.org/api/v1/upload", files={"file": f}, timeout=120)
         if res.status_code == 200:
-            data = res.json()
-            if data.get('success') and len(data.get('files', [])) > 0:
-                direct_link = data['files'][0]['url']
-                logger.info(f"[SUCCESS] Video Uploaded to Uguu.se: {direct_link}")
+            raw_url = res.json().get('data', {}).get('url', '')
+            if raw_url:
+                # Convert to direct MP4 download link suitable for n8n
+                direct_link = raw_url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
+                logger.info(f"✅ [SUCCESS] Video Uploaded to tmpfiles.org: {direct_link}")
+                logger.info(f"📊 Server: tmpfiles.org | Converted to direct link")
     except Exception as e:
-        logger.warning(f"Uguu.se upload failed: {e}")
+        logger.warning(f"❌ tmpfiles.org upload failed: {e}")
 
-# Attempt 3: Catbox.moe (Original method, runs only if the IP is not blocked)
+# ✅ ATTEMPT 3: Catbox.moe (TERTIARY - Last Resort)
 if not direct_link:
     try:
-        logger.info("Upload Attempt 3: Catbox.moe...")
+        logger.info("Upload Attempt 3: Catbox.moe [TERTIARY - LAST RESORT]...")
         with open(final_output, "rb") as f:
             res = requests.post(
                 "https://catbox.moe/user/api.php", 
@@ -414,15 +416,16 @@ if not direct_link:
             )
         if res.status_code == 200 and ("http://" in res.text or "https://" in res.text):
             direct_link = res.text.strip()
-            logger.info(f"[SUCCESS] Video Uploaded to Catbox.moe: {direct_link}")
+            logger.info(f"✅ [SUCCESS] Video Uploaded to Catbox.moe: {direct_link}")
+            logger.info(f"📊 Server: Catbox.moe | Direct link")
         else:
-            logger.warning(f"Catbox API returned Status: {res.status_code}")
+            logger.warning(f"❌ Catbox API returned Status: {res.status_code}")
     except Exception as e:
-        logger.warning(f"Catbox.moe upload failed: {e}")
+        logger.warning(f"❌ Catbox.moe upload failed: {e}")
 
-# Final verification
+# ❌ Final verification - All services failed
 if not direct_link:
-    logger.error("FATAL: Video upload failed across all service providers.")
+    logger.error("FATAL: Video upload failed across ALL service providers (Uguu.se, tmpfiles.org, Catbox.moe).")
     exit(1)
 
 # --- GitHub Actions Output ---
@@ -431,8 +434,9 @@ if github_output_path:
     try:
         with open(github_output_path, "a") as gh_out:
             gh_out.write(f"video_url={direct_link}\n")
+        logger.info(f"✅ GitHub Output written successfully")
     except Exception as e:
         logger.error(f"Failed to write to GITHUB_OUTPUT: {e}")
 
-logger.info(f"Process Complete. Final Direct URL: {direct_link}")
-
+logger.info(f"🎉 Process Complete! Final Direct URL: {direct_link}")
+logger.info(f"📤 Upload Priority: Uguu.se → tmpfiles.org → Catbox.moe")
