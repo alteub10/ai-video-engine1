@@ -21,13 +21,14 @@ import shutil
 import logging
 import subprocess
 import re
+import numpy as np
 from typing import Optional, List
 from contextlib import suppress
 
 import requests
 from moviepy.editor import (
     VideoFileClip, AudioFileClip, TextClip, CompositeVideoClip,
-    concatenate_videoclips, vfx, CompositeAudioClip, VideoClip
+    concatenate_videoclips, vfx, CompositeAudioClip, VideoClip, ColorClip
 )
 from faster_whisper import WhisperModel
 
@@ -100,7 +101,8 @@ def close_clip(c):
         if c is None:
             return
         # MoviePy's close should handle readers/subprocesses
-        c.close()
+        if hasattr(c, 'close') and callable(c.close):
+            c.close()
     except Exception as e:
         logger.debug(f"Error closing clip: {e}")
 
@@ -284,12 +286,17 @@ def transcribe_to_srt(audio_path: str, srt_path: str) -> bool:
 
 # ---------------------------------------------------------------------
 # Video processing: safe clip processing (resize, crop, loop/subclip)
+# FIXED: Proper MoviePy handling and frame compatibility
 # ---------------------------------------------------------------------
 def process_clip_safely(filename: str, target_duration: float, target_w: int, target_h: int) -> VideoFileClip:
     if not os.path.exists(filename) or os.path.getsize(filename) < 1024:
         raise FileNotFoundError(f"Video file missing or too small: {filename}")
     try:
-        clip = VideoFileClip(filename).without_audio()
+        clip = VideoFileClip(filename)
+        # Remove audio first to avoid codec issues
+        clip = clip.without_audio()
+        # Standardize FPS to avoid frame issues
+        clip = clip.set_fps(30)
         track_clip(clip)
     except Exception as e:
         raise RuntimeError(f"Failed to load video {filename}: {e}")
@@ -298,6 +305,7 @@ def process_clip_safely(filename: str, target_duration: float, target_w: int, ta
         close_clip(clip)
         raise ValueError(f"Clip {filename} has invalid or zero duration")
 
+    # Handle duration mismatch
     if clip.duration < target_duration:
         # loop to extend duration
         try:
@@ -305,6 +313,7 @@ def process_clip_safely(filename: str, target_duration: float, target_w: int, ta
             close_clip(clip)
             clip = track_clip(looped)
         except Exception as e:
+            logger.warning(f"Loop failed, attempting concatenation: {e}")
             # fallback: concatenate multiple copies
             parts = []
             remaining = target_duration
@@ -313,9 +322,13 @@ def process_clip_safely(filename: str, target_duration: float, target_w: int, ta
                 parts.append(clip.subclip(0, part_dur))
                 remaining -= part_dur
             if parts:
-                composed = concatenate_videoclips(parts, method="compose")
-                close_clip(clip)
-                clip = track_clip(composed)
+                try:
+                    composed = concatenate_videoclips(parts, method="compose")
+                    close_clip(clip)
+                    clip = track_clip(composed)
+                except Exception as e2:
+                    close_clip(clip)
+                    raise RuntimeError(f"Could not loop or extend clip {filename}: {e2}")
             else:
                 close_clip(clip)
                 raise RuntimeError(f"Could not loop or extend clip {filename}: {e}")
@@ -348,6 +361,7 @@ def process_clip_safely(filename: str, target_duration: float, target_w: int, ta
         close_clip(clip)
         raise RuntimeError(f"Failed to resize/crop {filename}: {e}")
 
+    # Apply slight darkening effect
     try:
         dark = clip.fx(vfx.colorx, 0.90)
         close_clip(clip)
@@ -399,6 +413,7 @@ def create_hook_clip(hook_text: str, duration: float, target_w: int, target_h: i
 
 # ---------------------------------------------------------------------
 # Subscribe animation processing: safe handling and placeholders
+# FIXED: Using ColorClip for placeholder instead of complex VideoClip
 # ---------------------------------------------------------------------
 def ensure_subscribe_animation(target_w: int) -> Optional[VideoClip]:
     # subscribe anim should be present as SUBSCRIBE_ANIM; if not, attempt to download known URL
@@ -410,6 +425,7 @@ def ensure_subscribe_animation(target_w: int) -> Optional[VideoClip]:
     if os.path.exists(SUBSCRIBE_ANIM) and os.path.getsize(SUBSCRIBE_ANIM) > 1024:
         try:
             anim = VideoFileClip(SUBSCRIBE_ANIM)
+            anim = anim.set_fps(30)
             track_clip(anim)
             # try to mask green background if present; if it fails, just resize
             try:
@@ -417,26 +433,25 @@ def ensure_subscribe_animation(target_w: int) -> Optional[VideoClip]:
                 close_clip(anim)
                 anim = track_clip(anim2)
             except Exception:
-                anim = anim.resize(width=int(target_w * 0.45))
-                # keep tracked
+                try:
+                    anim = anim.resize(width=int(target_w * 0.45))
+                except Exception:
+                    pass
             logger.info("Subscribe animation loaded and processed.")
             return anim
         except Exception as e:
             logger.warning(f"Failed to load subscribe animation: {e}")
             return None
     else:
-        # create a small simple placeholder as VideoClip with a solid color for 2s
+        # create a simple placeholder using ColorClip (more reliable than VideoClip)
         try:
             w = int(target_w * 0.25)
             h = int(w * 0.25)
-            def make_frame(t):
-                import numpy as np
-                frame = (255 * np.ones((h, w, 3), dtype='uint8'))
-                # could draw a simple circle using numpy but keep simple solid box with text not required
-                return frame
-            placeholder = VideoClip(make_frame=make_frame, duration=2.0).set_position(('center', 'center'))
+            # Use solid color clip instead of VideoClip
+            placeholder = ColorClip(size=(w, h), color=(255, 255, 255)).set_duration(2.0)
+            placeholder = placeholder.set_position(('center', 'center'))
             track_clip(placeholder)
-            logger.info("Using placeholder subscribe animation (no file).")
+            logger.info("Using placeholder subscribe animation (solid color).")
             return placeholder
         except Exception as e:
             logger.warning(f"Failed to create placeholder subscribe animation: {e}")
@@ -479,16 +494,36 @@ def build_timeline(video_files: List[str], total_audio_time: float, cut_duration
     return final_clips
 
 # ---------------------------------------------------------------------
-# Rendering via MoviePy
+# Rendering via MoviePy - FIXED VERSION
+# Proper clip duration handling and frame compatibility
 # ---------------------------------------------------------------------
 def render_base_video(clips_to_composite: List, size: tuple, total_audio, output_path: str) -> None:
     try:
-        composite = CompositeVideoClip(clips_to_composite, size=size)
-        composite = track_clip(composite)
-        # set audio and duration
-        composite = composite.set_audio(total_audio).set_duration(total_audio.duration if hasattr(total_audio, "duration") else None)
-        logger.info(f"Rendering base timeline to {output_path} ...")
-        # MoviePy's writer can consume a lot of RAM; use safe params
+        # Ensure all clips have proper duration set
+        for i, clip in enumerate(clips_to_composite):
+            if not hasattr(clip, 'duration') or clip.duration is None:
+                logger.warning(f"Clip {i} has no duration, setting to audio duration")
+                clip = clip.set_duration(total_audio.duration)
+                clips_to_composite[i] = clip
+        
+        # Verify audio has valid duration
+        if not hasattr(total_audio, 'duration') or total_audio.duration <= 0:
+            raise RuntimeError("Audio duration invalid or zero")
+        
+        logger.info(f"Creating composite video (size: {size}, duration: {total_audio.duration:.2f}s)...")
+        
+        # Create composite with explicit size and fps
+        composite = CompositeVideoClip(clips_to_composite, size=size, bg_color=(0, 0, 0))
+        composite = composite.set_fps(30)
+        track_clip(composite)
+        
+        # Set audio and duration explicitly
+        composite = composite.set_audio(total_audio)
+        composite = composite.set_duration(total_audio.duration)
+        
+        logger.info(f"Rendering base timeline to {output_path} (duration: {composite.duration:.2f}s)...")
+        
+        # Use write_videofile with improved settings
         composite.write_videofile(
             output_path,
             fps=30,
@@ -499,10 +534,13 @@ def render_base_video(clips_to_composite: List, size: tuple, total_audio, output
             threads=2,
             logger=None,
             temp_audiofile="temp_audio.m4a",
-            remove_temp=True
+            remove_temp=True,
+            verbose=False,
+            progress_bar=False
         )
         logger.info("Base timeline rendered successfully.")
     except Exception as e:
+        logger.error(f"MoviePy rendering failed: {e}")
         raise RuntimeError(f"MoviePy rendering failed: {e}")
     finally:
         # close composite explicitly
