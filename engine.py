@@ -31,7 +31,6 @@ def clean_old_files():
                 os.remove(f)
             except Exception as e:
                 logger.warning(f"Could not remove {f}: {e}")
-    # Clean up old video segments
     for f in os.listdir('.'):
         if f.startswith("video_") and f.endswith(".mp4"):
             try:
@@ -41,9 +40,7 @@ def clean_old_files():
 
 clean_old_files()
 
-# Tracker for MoviePy resources to ensure proper cleanup and prevent memory leaks
 open_clips = []
-
 def track_clip(clip):
     if clip is not None:
         open_clips.append(clip)
@@ -57,14 +54,12 @@ target_h = 1920
 cut_duration = float(os.environ.get("MAX_CLIP_DURATION", 4.0))
 topic_name = os.environ.get("TOPIC_NAME", "unknown")
 
-# Hook Text (Cleaned to prevent ImageMagick/FFmpeg crashes)
 raw_hook = os.environ.get("HOOK_TEXT", "CLASSIFIED ARCHIVE")
 hook_text = re.sub(r'[^\w\s]', '', raw_hook).strip()
 
 audio_url = os.environ.get("AUDIO_URL", "")
 video_urls_raw = os.environ.get("VIDEO_URLS", "[]")
 
-# Parse Video URLs safely
 try:
     video_urls = json.loads(video_urls_raw)
     if not isinstance(video_urls, list):
@@ -100,8 +95,7 @@ def download_with_retry(url, dest_path, attempts=3, timeout=30, stream=False):
                 else:
                     f.write(res.content)
             
-            # File validation
-            if os.path.exists(dest_path) and os.path.getsize(dest_path) > 1024: # Must be > 1KB
+            if os.path.exists(dest_path) and os.path.getsize(dest_path) > 1024:
                 return True
             logger.warning(f"Downloaded file empty or corrupted: {dest_path} (Attempt {attempt}/{attempts})")
         except Exception as e:
@@ -111,7 +105,7 @@ def download_with_retry(url, dest_path, attempts=3, timeout=30, stream=False):
             time.sleep(2)
             
     if os.path.exists(dest_path):
-        os.remove(dest_path) # Clean up bad file
+        os.remove(dest_path)
     return False
 
 # =================================================================
@@ -177,7 +171,6 @@ try:
                 end_time = chunk[-1].end  
 
                 raw_text = " ".join([w.word for w in chunk])  
-                # Clean punctuation for robust FFmpeg processing
                 clean_text = re.sub(r'[^\w\s]', '', raw_text).strip()  
 
                 if not clean_text:  
@@ -266,9 +259,6 @@ if not final_clips:
     logger.error("FATAL: All video clips failed to process. Exiting.")
     exit(1)
 
-if accumulated_duration < total_audio_time - 0.5:
-    logger.warning(f"Video coverage ({accumulated_duration:.1f}s) shorter than audio ({total_audio_time:.1f}s). Timeline will freeze at end.")
-
 video_track = track_clip(concatenate_videoclips(final_clips, method="compose"))
 clips_to_composite = [video_track]
 
@@ -282,7 +272,7 @@ try:
         hook_clip = hook_clip.set_position(('center', 200)).set_duration(min(3.0, total_audio_time)).set_start(0)
         clips_to_composite.append(track_clip(hook_clip))
 except Exception as e:
-    logger.warning(f"Failed to render hook text overlay (ImageMagick issue?), skipping: {e}")
+    logger.warning(f"Failed to render hook text overlay, skipping: {e}")
 
 # --- Animated Subscribe Button ---
 subscribe_url = "https://files.catbox.moe/oarfxq.mp4"
@@ -304,9 +294,7 @@ if os.path.exists(subscribe_file) and os.path.getsize(subscribe_file) > 1024:
             
         logger.info("Subscribe animations added to timeline successfully.")
     except Exception as e:
-        logger.warning(f"Failed to process subscribe animations (Green screen error?), skipping: {e}")
-else:
-    logger.warning("Subscribe animation file missing or corrupted. Skipping.")
+        logger.warning(f"Failed to process subscribe animations, skipping: {e}")
 
 # --- Rendering ---
 final_video = track_clip(CompositeVideoClip(clips_to_composite, size=(target_w, target_h)))
@@ -350,7 +338,6 @@ if not os.path.exists(selected_lut):
 
 filters_list = []
 if os.path.exists("subs.srt") and os.path.getsize("subs.srt") > 0:
-    # Ensure subs.srt path is safe for FFmpeg parsing
     sub_style = "force_style='Fontname=Liberation Sans,Bold=1,Fontsize=18,PrimaryColour=&HFFFFFF&,OutlineColour=&H8B0000&,BackColour=&H000000&,BorderStyle=1,Outline=1.5,Shadow=0,Alignment=2,MarginL=30,MarginR=30,MarginV=45'"
     filters_list.append(f"subtitles=subs.srt:{sub_style}")
 
@@ -369,55 +356,73 @@ try:
     subprocess.run(cmd_final, check=True, timeout=180, capture_output=True, text=True)
     logger.info("SUCCESS: Final Video generated with perfect Layout and Clean Borders!")
 except subprocess.TimeoutExpired:
-    logger.warning("FFmpeg timed out after 180s. Saving un-filtered base video as emergency fallback.")
+    logger.warning("FFmpeg timed out. Saving un-filtered base video as fallback.")
     shutil.copy("temp_base.mp4", final_output)
 except subprocess.CalledProcessError as e:
-    logger.error(f"FFmpeg Failed. Stderr: {e.stderr}")
-    logger.warning("Saving un-filtered base video as emergency fallback.")
+    logger.error(f"FFmpeg Failed. Saving un-filtered base video. Stderr: {e.stderr}")
     shutil.copy("temp_base.mp4", final_output)
 
 # =================================================================
-# [8] ☁️ Catbox Upload & Output
+# [8] ☁️ Multi-Provider Robust Upload Manager
 # =================================================================
 if not os.path.exists(final_output) or os.path.getsize(final_output) == 0:
     logger.error("FATAL: Output video not found or empty. Cannot upload.")
     exit(1)
 
-logger.info(f"Uploading {final_output} to Catbox.moe...")
-upload_url = "https://catbox.moe/user/api.php"
+logger.info(f"Starting Multi-Provider Upload Manager for {final_output}...")
 direct_link = None
 
-for attempt in range(1, 4):
-    try:
-        with open(final_output, "rb") as f:
-            response = requests.post(
-                upload_url,
-                data={"reqtype": "fileupload"},
-                files={"fileToUpload": (os.path.basename(final_output), f, "video/mp4")},
-                headers={"User-Agent": "Mozilla/5.0"},
-                timeout=300
-            )
-        
-        if response.status_code == 200:
-            resp_text = response.text.strip()
-            if resp_text.startswith("http://") or resp_text.startswith("https://"):
-                direct_link = resp_text
-                logger.info(f"SUCCESS! Video Uploaded: {direct_link}")
-                break
-            else:
-                logger.warning(f"Upload returned invalid response: {resp_text}")
-        else:
-            logger.warning(f"Upload Attempt {attempt} Failed. Status: {response.status_code}")
-            
-    except Exception as e:
-        logger.warning(f"Exception during upload attempt {attempt}: {str(e)}")
-        
-    if attempt < 3:
-        logger.info("Retrying upload in 5 seconds...")
-        time.sleep(5)
+# Attempt 1: tmpfiles.org (Extremely reliable for GitHub Actions IPs, provides direct URL)
+try:
+    logger.info("Upload Attempt 1: tmpfiles.org...")
+    with open(final_output, "rb") as f:
+        res = requests.post("https://tmpfiles.org/api/v1/upload", files={"file": f}, timeout=120)
+    if res.status_code == 200:
+        raw_url = res.json().get('data', {}).get('url', '')
+        if raw_url:
+            # Convert to direct MP4 download link suitable for n8n
+            direct_link = raw_url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
+            logger.info(f"[SUCCESS] Video Uploaded to tmpfiles.org: {direct_link}")
+except Exception as e:
+    logger.warning(f"tmpfiles.org upload failed: {e}")
 
+# Attempt 2: Uguu.se (Fallback if tmpfiles fails)
 if not direct_link:
-    logger.error("FATAL: Video upload failed after all retries.")
+    try:
+        logger.info("Upload Attempt 2: Uguu.se...")
+        with open(final_output, "rb") as f:
+            res = requests.post("https://uguu.se/upload.php", files={"files[]": f}, timeout=120)
+        if res.status_code == 200:
+            data = res.json()
+            if data.get('success') and len(data.get('files', [])) > 0:
+                direct_link = data['files'][0]['url']
+                logger.info(f"[SUCCESS] Video Uploaded to Uguu.se: {direct_link}")
+    except Exception as e:
+        logger.warning(f"Uguu.se upload failed: {e}")
+
+# Attempt 3: Catbox.moe (Original method, runs only if the IP is not blocked)
+if not direct_link:
+    try:
+        logger.info("Upload Attempt 3: Catbox.moe...")
+        with open(final_output, "rb") as f:
+            res = requests.post(
+                "https://catbox.moe/user/api.php", 
+                data={"reqtype": "fileupload"}, 
+                files={"fileToUpload": f}, 
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=120
+            )
+        if res.status_code == 200 and ("http://" in res.text or "https://" in res.text):
+            direct_link = res.text.strip()
+            logger.info(f"[SUCCESS] Video Uploaded to Catbox.moe: {direct_link}")
+        else:
+            logger.warning(f"Catbox API returned Status: {res.status_code}")
+    except Exception as e:
+        logger.warning(f"Catbox.moe upload failed: {e}")
+
+# Final verification
+if not direct_link:
+    logger.error("FATAL: Video upload failed across all service providers.")
     exit(1)
 
 # --- GitHub Actions Output ---
@@ -429,5 +434,4 @@ if github_output_path:
     except Exception as e:
         logger.error(f"Failed to write to GITHUB_OUTPUT: {e}")
 
-logger.info(f"Process Complete. Final URL: {direct_link}")
-
+logger.info(f"Process Complete. Final Direct URL: {direct_link}")
