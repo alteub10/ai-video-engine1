@@ -284,15 +284,31 @@ if not os.path.exists(subscribe_file):
 
 if os.path.exists(subscribe_file) and os.path.getsize(subscribe_file) > 1024:
     try:
+        # تجهيز الفيديو الأساسي وإزالة الخلفية الخضراء بجودة عالية
         base_anim = track_clip(VideoFileClip(subscribe_file))
-        base_anim = base_anim.fx(vfx.mask_color, color=[0, 255, 0], thr=100, s=5).resize(width=target_w * 0.45)
+        base_anim = base_anim.fx(vfx.mask_color, color=[0, 255, 0], thr=180, s=15)
+        anim_duration = base_anim.duration or 3.0 # مدة حركة زر الاشتراك (عادة حوالي 3 ثواني)
         
+        # 1. النسخة الثابتة في الزاوية (أعلى اليمين)
+        corner_anim = base_anim.resize(width=target_w * 0.25)
+        corner_anim = corner_anim.fx(vfx.loop, duration=total_audio_time)
+        corner_anim = corner_anim.set_position(('right', 50)).set_start(0)
+        clips_to_composite.append(track_clip(corner_anim))
+
+        # 2. النسخة التي تظهر في المنتصف
+        center_anim = base_anim.resize(width=target_w * 0.45)
+        
+        # الظهور الأول في المنتصف: الثانية 10 فقط
         if total_audio_time > 10:
-            clips_to_composite.append(track_clip(base_anim.copy().set_start(10).set_position(('center', 'center'))))
-        if total_audio_time > 25:
-            clips_to_composite.append(track_clip(base_anim.copy().set_start(25).set_position(('center', 'center'))))
+            clips_to_composite.append(track_clip(center_anim.copy().set_start(10).set_position(('center', 'center'))))
             
-        logger.info("Subscribe animations added to timeline successfully.")
+        # الظهور الثاني في المنتصف: في نهاية الفيديو
+        end_time = total_audio_time - anim_duration
+        # نتأكد أن الظهور الثاني لا يتداخل مع الأول إذا كان الفيديو قصيراً
+        if end_time > 10 + anim_duration: 
+            clips_to_composite.append(track_clip(center_anim.copy().set_start(end_time).set_position(('center', 'center'))))
+            
+        logger.info("Subscribe animations (Corner & Center) added to timeline successfully.")
     except Exception as e:
         logger.warning(f"Failed to process subscribe animations, skipping: {e}")
 
