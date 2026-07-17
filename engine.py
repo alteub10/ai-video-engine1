@@ -284,29 +284,31 @@ if not os.path.exists(subscribe_file):
 
 if os.path.exists(subscribe_file) and os.path.getsize(subscribe_file) > 1024:
     try:
-        # تجهيز الفيديو الأساسي وإزالة الخلفية الخضراء بجودة عالية
-        base_anim = track_clip(VideoFileClip(subscribe_file))
-        base_anim = base_anim.fx(vfx.mask_color, color=[0, 255, 0], thr=180, s=15)
-        anim_duration = base_anim.duration or 3.0 # مدة حركة زر الاشتراك (عادة حوالي 3 ثواني)
+        # قراءة مدة أنيميشن الاشتراك لمعرفة وقت النهاية
+        temp_clip = VideoFileClip(subscribe_file)
+        anim_duration = temp_clip.duration or 8.0
+        temp_clip.close()
         
-        # 1. النسخة الثابتة في الزاوية (أعلى اليمين)
-        corner_anim = base_anim.resize(width=target_w * 0.25)
-        corner_anim = corner_anim.fx(vfx.loop, duration=total_audio_time)
-        corner_anim = corner_anim.set_position(('right', 50)).set_start(0)
+        # 1. النسخة الثابتة في الزاوية (أعلى اليمين، طول مدة الفيديو)
+        corner_clip = track_clip(VideoFileClip(subscribe_file)).without_audio()
+        corner_clip = corner_clip.fx(vfx.mask_color, color=[0, 255, 0], thr=180, s=15).resize(width=target_w * 0.25)
+        corner_anim = corner_clip.fx(vfx.loop, duration=total_audio_time).set_position(('right', 50)).set_start(0)
         clips_to_composite.append(track_clip(corner_anim))
 
-        # 2. النسخة التي تظهر في المنتصف
-        center_anim = base_anim.resize(width=target_w * 0.45)
-        
-        # الظهور الأول في المنتصف: الثانية 10 فقط
+        # 2. النسخة التي تظهر في المنتصف (الظهور الأول في الثانية 10)
         if total_audio_time > 10:
-            clips_to_composite.append(track_clip(center_anim.copy().set_start(10).set_position(('center', 'center'))))
+            center_clip_1 = track_clip(VideoFileClip(subscribe_file)).without_audio()
+            center_clip_1 = center_clip_1.fx(vfx.mask_color, color=[0, 255, 0], thr=180, s=15).resize(width=target_w * 0.45)
+            center_anim_1 = center_clip_1.set_start(10).set_position(('center', 'center'))
+            clips_to_composite.append(track_clip(center_anim_1))
             
-        # الظهور الثاني في المنتصف: في نهاية الفيديو
+        # 3. النسخة التي تظهر في المنتصف (الظهور الثاني في النهاية)
         end_time = total_audio_time - anim_duration
-        # نتأكد أن الظهور الثاني لا يتداخل مع الأول إذا كان الفيديو قصيراً
         if end_time > 10 + anim_duration: 
-            clips_to_composite.append(track_clip(center_anim.copy().set_start(end_time).set_position(('center', 'center'))))
+            center_clip_2 = track_clip(VideoFileClip(subscribe_file)).without_audio()
+            center_clip_2 = center_clip_2.fx(vfx.mask_color, color=[0, 255, 0], thr=180, s=15).resize(width=target_w * 0.45)
+            center_anim_2 = center_clip_2.set_start(end_time).set_position(('center', 'center'))
+            clips_to_composite.append(track_clip(center_anim_2))
             
         logger.info("Subscribe animations (Corner & Center) added to timeline successfully.")
     except Exception as e:
@@ -389,7 +391,7 @@ logger.info(f"Starting Upload Manager for {final_output} (Direct MP4 Links)...")
 direct_link = None
 
 headers_upload = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/114.0.0.0"
 }
 
 # Attempt 1: Litterbox (Primary - Retains file for 12 hours, perfect for YouTube Shorts)
