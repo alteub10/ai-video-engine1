@@ -24,7 +24,7 @@ logger.info("Initializing AI Video Engine [Production Version]...")
 
 def clean_old_files():
     """Removes leftover files from previous failed runs to prevent corruption."""
-    files_to_remove = ["audio.mp3", "subs.srt", "temp_base.mp4", "final_shorts.mp4", "subscribe_anim.mp4"]
+    files_to_remove = ["audio.mp3", "subs.srt", "temp_base.mp4", "final_shorts.mp4", "subscribe_anim.mp4", "subscribe_fixed.mp4"]
     for f in files_to_remove:
         if os.path.exists(f):
             try:
@@ -277,6 +277,7 @@ except Exception as e:
 # --- Animated Subscribe Button ---
 subscribe_url = "https://files.catbox.moe/oarfxq.mp4"
 subscribe_file = "subscribe_anim.mp4"
+fixed_subscribe_file = "subscribe_fixed.mp4"
 
 logger.info("Preparing Animated Subscribe Button...")
 if not os.path.exists(subscribe_file):
@@ -284,28 +285,40 @@ if not os.path.exists(subscribe_file):
 
 if os.path.exists(subscribe_file) and os.path.getsize(subscribe_file) > 1024:
     try:
-        # قراءة مدة أنيميشن الاشتراك لمعرفة وقت النهاية
-        temp_clip = VideoFileClip(subscribe_file)
+        # [حماية إضافية جذريّة]: إصلاح هيكلية فريمات الفيديو والتخلص من الفريمات التالفة عبر FFmpeg قبل فتحه في MoviePy
+        logger.info("Fixing subscribe animation structure via FFmpeg remuxing...")
+        repair_cmd = [
+            'ffmpeg', '-y', '-i', subscribe_file, 
+            '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-vsync', 'vfr', 
+            '-an', fixed_subscribe_file
+        ]
+        subprocess.run(repair_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        
+        target_anim_file = fixed_subscribe_file if os.path.exists(fixed_subscribe_file) else subscribe_file
+        
+        temp_clip = VideoFileClip(target_anim_file)
         anim_duration = temp_clip.duration or 8.0
+        # ترك هامش أمان بسيط (0.1 ثانية) لتفادي قراءة آخر فريم تالف إذا وجد
+        safe_anim_duration = max(0.5, anim_duration - 0.1)
         temp_clip.close()
         
         # 1. النسخة الثابتة في الزاوية (أعلى اليمين، طول مدة الفيديو)
-        corner_clip = track_clip(VideoFileClip(subscribe_file)).without_audio()
+        corner_clip = track_clip(VideoFileClip(target_anim_file)).subclip(0, safe_anim_duration).without_audio()
         corner_clip = corner_clip.fx(vfx.mask_color, color=[0, 255, 0], thr=180, s=15).resize(width=target_w * 0.25)
         corner_anim = corner_clip.fx(vfx.loop, duration=total_audio_time).set_position(('right', 50)).set_start(0)
         clips_to_composite.append(track_clip(corner_anim))
 
         # 2. النسخة التي تظهر في المنتصف (الظهور الأول في الثانية 10)
         if total_audio_time > 10:
-            center_clip_1 = track_clip(VideoFileClip(subscribe_file)).without_audio()
+            center_clip_1 = track_clip(VideoFileClip(target_anim_file)).subclip(0, safe_anim_duration).without_audio()
             center_clip_1 = center_clip_1.fx(vfx.mask_color, color=[0, 255, 0], thr=180, s=15).resize(width=target_w * 0.45)
             center_anim_1 = center_clip_1.set_start(10).set_position(('center', 'center'))
             clips_to_composite.append(track_clip(center_anim_1))
             
         # 3. النسخة التي تظهر في المنتصف (الظهور الثاني في النهاية)
-        end_time = total_audio_time - anim_duration
-        if end_time > 10 + anim_duration: 
-            center_clip_2 = track_clip(VideoFileClip(subscribe_file)).without_audio()
+        end_time = total_audio_time - safe_anim_duration
+        if end_time > 10 + safe_anim_duration: 
+            center_clip_2 = track_clip(VideoFileClip(target_anim_file)).subclip(0, safe_anim_duration).without_audio()
             center_clip_2 = center_clip_2.fx(vfx.mask_color, color=[0, 255, 0], thr=180, s=15).resize(width=target_w * 0.45)
             center_anim_2 = center_clip_2.set_start(end_time).set_position(('center', 'center'))
             clips_to_composite.append(track_clip(center_anim_2))
