@@ -20,17 +20,20 @@ from faster_whisper import WhisperModel
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
 
-logger.info("Initializing AI Video Engine [Production Version]...")
+logger.info("Initializing AI Video Engine [Production Version] - 40-Year Expert Edition...")
 
 def clean_old_files():
     """Removes leftover files from previous failed runs to prevent corruption."""
-    files_to_remove = ["audio.mp3", "subs.srt", "temp_base.mp4", "final_shorts.mp4", "subscribe_anim.mp4", "subscribe_fixed.mp4"]
+    files_to_remove = [
+        "audio.mp3", "subs.srt", "temp_base.mp4", "final_shorts.mp4", 
+        "subscribe_anim.mp4", "sub_corner.mp4", "sub_center1.mp4", "sub_center2.mp4"
+    ]
     for f in files_to_remove:
         if os.path.exists(f):
             try:
                 os.remove(f)
-            except Exception as e:
-                logger.warning(f"Could not remove {f}: {e}")
+            except Exception:
+                pass
     for f in os.listdir('.'):
         if f.startswith("video_") and f.endswith(".mp4"):
             try:
@@ -97,7 +100,6 @@ def download_with_retry(url, dest_path, attempts=3, timeout=30, stream=False):
             
             if os.path.exists(dest_path) and os.path.getsize(dest_path) > 1024:
                 return True
-            logger.warning(f"Downloaded file empty or corrupted: {dest_path} (Attempt {attempt}/{attempts})")
         except Exception as e:
             logger.warning(f"Download attempt {attempt}/{attempts} failed for {url}: {str(e)}")
         
@@ -192,9 +194,9 @@ except Exception as e:
 # [5] ✂️ B-Roll Safe Processing Engine
 # =================================================================
 def process_clip_safely(filename, target_duration):
-    clip = VideoFileClip(filename).without_audio()
+    raw_clip = track_clip(VideoFileClip(filename))
+    clip = raw_clip.without_audio()
     if clip.duration is None or clip.duration <= 0:
-        clip.close()
         raise ValueError(f"Clip {filename} has invalid/zero duration")
 
     if clip.duration < target_duration:  
@@ -274,56 +276,59 @@ try:
 except Exception as e:
     logger.warning(f"Failed to render hook text overlay, skipping: {e}")
 
-# --- Animated Subscribe Button ---
+# --- Animated Subscribe Button (THE BULLETPROOF ARCHITECTURE) ---
 subscribe_url = "https://files.catbox.moe/oarfxq.mp4"
 subscribe_file = "subscribe_anim.mp4"
-fixed_subscribe_file = "subscribe_fixed.mp4"
 
-logger.info("Preparing Animated Subscribe Button...")
+logger.info("Preparing Animated Subscribe Button with FFmpeg Pre-baking...")
 if not os.path.exists(subscribe_file):
     download_with_retry(subscribe_url, subscribe_file, attempts=2, stream=True)
 
 if os.path.exists(subscribe_file) and os.path.getsize(subscribe_file) > 1024:
     try:
-        # [حماية إضافية جذريّة]: إصلاح هيكلية فريمات الفيديو والتخلص من الفريمات التالفة عبر FFmpeg قبل فتحه في MoviePy
-        logger.info("Fixing subscribe animation structure via FFmpeg remuxing...")
-        repair_cmd = [
-            'ffmpeg', '-y', '-i', subscribe_file, 
-            '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-vsync', 'vfr', 
-            '-an', fixed_subscribe_file
+        safe_anim_dur = 7.8 # مدة آمنة تماماً تقص الإطارات التالفة في نهاية الملف
+        
+        # [1] توليد ملف مكرر وجاهز للزاوية (نلغي استخدام vfx.loop المسبب للمشاكل تماماً)
+        loop_cmd = [
+            'ffmpeg', '-y', '-stream_loop', '-1', '-i', subscribe_file, 
+            '-t', str(total_audio_time), 
+            '-r', '30', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-an', 
+            'sub_corner.mp4'
         ]
-        subprocess.run(repair_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        subprocess.run(loop_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
         
-        target_anim_file = fixed_subscribe_file if os.path.exists(fixed_subscribe_file) else subscribe_file
+        # [2] توليد ملف ثابت وصحيح 100% للمنتصف
+        single_cmd = [
+            'ffmpeg', '-y', '-i', subscribe_file, 
+            '-t', str(safe_anim_dur), 
+            '-r', '30', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-an', 
+            'sub_center1.mp4'
+        ]
+        subprocess.run(single_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        shutil.copy('sub_center1.mp4', 'sub_center2.mp4')
         
-        temp_clip = VideoFileClip(target_anim_file)
-        anim_duration = temp_clip.duration or 8.0
-        # ترك هامش أمان بسيط (0.1 ثانية) لتفادي قراءة آخر فريم تالف إذا وجد
-        safe_anim_duration = max(0.5, anim_duration - 0.1)
-        temp_clip.close()
-        
-        # 1. النسخة الثابتة في الزاوية (أعلى اليمين، طول مدة الفيديو)
-        corner_clip = track_clip(VideoFileClip(target_anim_file)).subclip(0, safe_anim_duration).without_audio()
-        corner_clip = corner_clip.fx(vfx.mask_color, color=[0, 255, 0], thr=180, s=15).resize(width=target_w * 0.25)
-        corner_anim = corner_clip.fx(vfx.loop, duration=total_audio_time).set_position(('right', 50)).set_start(0)
+        # 1. النسخة الثابتة في الزاوية (نستدعيها فقط ولا نطبق عليها أي عملية تكرار)
+        corner_raw = track_clip(VideoFileClip("sub_corner.mp4"))
+        corner_clip = corner_raw.without_audio().fx(vfx.mask_color, color=[0, 255, 0], thr=180, s=15).resize(width=target_w * 0.25)
+        corner_anim = corner_clip.set_position(('right', 50)).set_start(0) # لاحظ إزالة vfx.loop
         clips_to_composite.append(track_clip(corner_anim))
 
-        # 2. النسخة التي تظهر في المنتصف (الظهور الأول في الثانية 10)
+        # 2. النسخة في المنتصف (الظهور الأول)
         if total_audio_time > 10:
-            center_clip_1 = track_clip(VideoFileClip(target_anim_file)).subclip(0, safe_anim_duration).without_audio()
-            center_clip_1 = center_clip_1.fx(vfx.mask_color, color=[0, 255, 0], thr=180, s=15).resize(width=target_w * 0.45)
+            center_raw_1 = track_clip(VideoFileClip("sub_center1.mp4"))
+            center_clip_1 = center_raw_1.without_audio().fx(vfx.mask_color, color=[0, 255, 0], thr=180, s=15).resize(width=target_w * 0.45)
             center_anim_1 = center_clip_1.set_start(10).set_position(('center', 'center'))
             clips_to_composite.append(track_clip(center_anim_1))
             
-        # 3. النسخة التي تظهر في المنتصف (الظهور الثاني في النهاية)
-        end_time = total_audio_time - safe_anim_duration
-        if end_time > 10 + safe_anim_duration: 
-            center_clip_2 = track_clip(VideoFileClip(target_anim_file)).subclip(0, safe_anim_duration).without_audio()
-            center_clip_2 = center_clip_2.fx(vfx.mask_color, color=[0, 255, 0], thr=180, s=15).resize(width=target_w * 0.45)
+        # 3. النسخة في المنتصف (الظهور الثاني)
+        end_time = total_audio_time - safe_anim_dur
+        if end_time > 10 + safe_anim_dur: 
+            center_raw_2 = track_clip(VideoFileClip("sub_center2.mp4"))
+            center_clip_2 = center_raw_2.without_audio().fx(vfx.mask_color, color=[0, 255, 0], thr=180, s=15).resize(width=target_w * 0.45)
             center_anim_2 = center_clip_2.set_start(end_time).set_position(('center', 'center'))
             clips_to_composite.append(track_clip(center_anim_2))
             
-        logger.info("Subscribe animations (Corner & Center) added to timeline successfully.")
+        logger.info("Subscribe animations added successfully using Pre-baked FFmpeg logic.")
     except Exception as e:
         logger.warning(f"Failed to process subscribe animations, skipping: {e}")
 
@@ -407,7 +412,7 @@ headers_upload = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/114.0.0.0"
 }
 
-# Attempt 1: Litterbox (Primary - Retains file for 12 hours, perfect for YouTube Shorts)
+# Attempt 1: Litterbox (Primary)
 try:
     logger.info("Upload Attempt 1: Litterbox...")
     with open(final_output, "rb") as f:
@@ -426,7 +431,7 @@ try:
 except Exception as e:
     logger.warning(f"Litterbox upload failed: {e}")
 
-# Attempt 2: Uguu.se (Fallback - Direct link, no account required)
+# Attempt 2: Uguu.se (Fallback)
 if not direct_link:
     try:
         logger.info("Upload Attempt 2: Uguu.se...")
@@ -440,7 +445,6 @@ if not direct_link:
     except Exception as e:
         logger.warning(f"Uguu.se upload failed: {e}")
 
-# Final verification
 if not direct_link:
     logger.error("FATAL: Video upload failed across all service providers.")
     exit(1)
