@@ -288,7 +288,7 @@ if os.path.exists(subscribe_file) and os.path.getsize(subscribe_file) > 1024:
     try:
         safe_anim_dur = 7.8 # مدة آمنة تماماً تقص الإطارات التالفة في نهاية الملف
         
-        # [1] توليد ملف مكرر وجاهز للزاوية (نلغي استخدام vfx.loop المسبب للمشاكل تماماً)
+        # [1] توليد ملف مكرر وجاهز للزاوية
         loop_cmd = [
             'ffmpeg', '-y', '-stream_loop', '-1', '-i', subscribe_file, 
             '-t', str(total_audio_time), 
@@ -307,10 +307,10 @@ if os.path.exists(subscribe_file) and os.path.getsize(subscribe_file) > 1024:
         subprocess.run(single_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
         shutil.copy('sub_center1.mp4', 'sub_center2.mp4')
         
-        # 1. النسخة الثابتة في الزاوية (نستدعيها فقط ولا نطبق عليها أي عملية تكرار)
+        # 1. النسخة الثابتة في الزاوية (بحجم 0.40 للبروز الأفضل وموضع متوازن)
         corner_raw = track_clip(VideoFileClip("sub_corner.mp4"))
-        corner_clip = corner_raw.without_audio().fx(vfx.mask_color, color=[0, 255, 0], thr=180, s=15).resize(width=target_w * 0.25)
-        corner_anim = corner_clip.set_position(('right', 50)).set_start(0) # لاحظ إزالة vfx.loop
+        corner_clip = corner_raw.without_audio().fx(vfx.mask_color, color=[0, 255, 0], thr=180, s=15).resize(width=target_w * 0.40)
+        corner_anim = corner_clip.set_position(('right', 40)).set_start(0) 
         clips_to_composite.append(track_clip(corner_anim))
 
         # 2. النسخة في المنتصف (الظهور الأول)
